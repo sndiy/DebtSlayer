@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/ui/screens/LoadingScreen.kt
 package com.hyse.debtslayer.ui.screens
 
 import androidx.compose.animation.*
