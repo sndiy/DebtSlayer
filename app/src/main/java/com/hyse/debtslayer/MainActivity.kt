@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/MainActivity.kt
 package com.hyse.debtslayer
 
 import android.Manifest
