@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- File: app/src/main/res/drawable/widget_background.xml -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC6200EA" />
+    <corners android:radius="16dp" />
+</shape>

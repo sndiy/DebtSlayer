@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- File: app/src/main/res/layout/widget_debt.xml -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:padding="12dp">
+
+    <!-- Header -->
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="💰 DebtSlayer"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Progress percentage -->
+    <TextView
+        android:id="@+id/widget_progress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0% Lunas"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF" />
+
+    <!-- Progress bar -->
+    <ProgressBar
+        android:id="@+id/widget_progressbar"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="4dp"
+        android:max="100"
+        android:progress="0" />
+
+    <!-- Sisa hutang -->
+    <TextView
+        android:id="@+id/widget_remaining"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Sisa: Rp 0"
+        android:textSize="11sp"
+        android:textColor="#E0E0E0" />
+
+    <!-- Target hari ini -->
+    <TextView
+        android:id="@+id/widget_target"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Target: Rp 0/hari"
+        android:textSize="11sp"
+        android:textColor="#E0E0E0" />
+
+    <!-- Status hari ini -->
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="⏳ Belum setor"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF" />
+
+    <!-- Hari tersisa -->
+    <TextView
+        android:id="@+id/widget_days"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="- hari lagi"
+        android:textSize="10sp"
+        android:textColor="#BDBDBD" />
+
+</LinearLayout>
