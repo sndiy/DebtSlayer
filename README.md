@@ -117,18 +117,6 @@ app/src/main/java/com/hyse/debtslayer/
 
 ---
 
-## 📊 Limit API (Gemini 2.5 Flash Lite — Free Tier)
-
-| Limit | Nilai |
-|---|---|
-| Request per menit (RPM) | 10 |
-| Request per hari (RPD) | 20 |
-| Token per menit (TPM) | 250.000 |
-
-Status penggunaan bisa dipantau di tab **Settings** dalam app.
-
----
-
 ## 🤝 Kontribusi
 
 Pull request welcome. Untuk perubahan besar, buka issue terlebih dahulu.
