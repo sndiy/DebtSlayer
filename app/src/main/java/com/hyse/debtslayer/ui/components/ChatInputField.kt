@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/yourname/debtslayer/ui/components/ChatInputField.kt
 package com.hyse.debtslayer.ui.components
 
 import androidx.compose.foundation.layout.*

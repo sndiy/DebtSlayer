@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/yourname/debtslayer/data/entity/ConversationFeedback.kt
 package com.hyse.debtslayer.data.entity
 
 import androidx.room.Entity

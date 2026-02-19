@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/notification/BootReceiver.kt
 package com.hyse.debtslayer.notification
 
 import android.content.BroadcastReceiver

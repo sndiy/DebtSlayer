@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/ui/components/ChatBubble.kt
 package com.hyse.debtslayer.ui.components
 
 import androidx.compose.animation.AnimatedVisibility

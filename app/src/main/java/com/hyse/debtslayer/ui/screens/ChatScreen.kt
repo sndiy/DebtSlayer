@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/ui/screens/ChatScreen.kt
 package com.hyse.debtslayer.ui.screens
 
 import android.content.Context

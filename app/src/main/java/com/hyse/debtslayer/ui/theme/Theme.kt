@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/ui/theme/Theme.kt
 package com.hyse.debtslayer.ui.theme
 
 import android.app.Activity

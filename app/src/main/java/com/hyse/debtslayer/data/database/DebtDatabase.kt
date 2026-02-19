@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/data/database/DebtDatabase.kt
 package com.hyse.debtslayer.data.database
 
 import android.content.Context

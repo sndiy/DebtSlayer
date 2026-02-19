@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/MainActivity.kt
 package com.hyse.debtslayer
 
 import android.Manifest
@@ -11,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
+import com.hyse.debtslayer.BuildConfig
 import com.hyse.debtslayer.data.database.DebtDatabase
 import com.hyse.debtslayer.data.repository.ChatMessageRepository
 import com.hyse.debtslayer.data.repository.ConversationRepository

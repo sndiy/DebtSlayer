@@ -76,6 +76,13 @@ data class RateLimitInfo(
         ((triggeredAt + retryAfterMs) - System.currentTimeMillis()).div(1000).coerceAtLeast(0)
 }
 
+// ── Status validasi API Key ────────────────────────────────────────────────────
+sealed class ApiKeyStatus {
+    object Checking : ApiKeyStatus()
+    object Valid : ApiKeyStatus()
+    data class Invalid(val reason: String) : ApiKeyStatus()
+}
+
 class DebtViewModel(
     private val repository: TransactionRepository,
     private val feedbackRepository: FeedbackRepository,
@@ -145,6 +152,14 @@ class DebtViewModel(
     private val _pendingFirstSetupGreeting = MutableStateFlow(false)
     val pendingFirstSetupGreeting: StateFlow<Boolean> = _pendingFirstSetupGreeting.asStateFlow()
 
+    // ── API Key validation status ──────────────────────────────────────────────
+    private val _apiKeyStatus = MutableStateFlow<ApiKeyStatus>(ApiKeyStatus.Checking)
+    val apiKeyStatus: StateFlow<ApiKeyStatus> = _apiKeyStatus.asStateFlow()
+
+    // Step loading yang sedang berjalan (untuk LoadingScreen)
+    private val _loadingStep = MutableStateFlow(0)
+    val loadingStep: StateFlow<Int> = _loadingStep.asStateFlow()
+
     val isOnboardingDone = preferencesRepository.isOnboardingDone
     val initialDeadline = preferencesRepository.initialDeadline
 
@@ -164,6 +179,7 @@ class DebtViewModel(
         private const val TAG = "DebtViewModel"
         const val MODEL_NAME = "gemini-2.5-flash-lite"
         private const val REQUEST_TIMEOUT_MS = 30_000L
+        private const val VALIDATE_TIMEOUT_MS = 10_000L
 
         val MODEL_LIMITS = ModelLimits(
             rpm = 10,
@@ -184,20 +200,36 @@ class DebtViewModel(
 
     init {
         viewModelScope.launch {
+            // Step 1: Preferensi
+            _loadingStep.value = 0
             loadPreferences()
 
+            // Step 2: Data transaksi
+            _loadingStep.value = 1
             val firstTransactions = withContext(Dispatchers.IO) {
                 repository.allTransactions.firstOrNull() ?: emptyList()
             }
             _transactions.value = firstTransactions
             recalculateDebtState(firstTransactions)
 
+            // Step 3: Riwayat chat
+            _loadingStep.value = 2
             loadChatHistory()
+
+            // Step 4: Inisialisasi model AI
+            _loadingStep.value = 3
             initAIModel(apiKey)
+
+            // Step 5: Validasi API Key
+            _loadingStep.value = 4
+            validateApiKey()
+
+            // Step 6: Feedback stats + cleanup
+            _loadingStep.value = 5
             loadFeedbackStats()
             cleanupOldData()
 
-            delay(200)
+            delay(300)
             _isDataReady.value = true
         }
 
@@ -205,6 +237,63 @@ class DebtViewModel(
             repository.allTransactions.collect { transactionList ->
                 _transactions.value = transactionList
                 recalculateDebtState(transactionList)
+            }
+        }
+    }
+
+    // ── Validasi API Key dengan test request ───────────────────────────────────
+    private suspend fun validateApiKey() {
+        if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY_HERE") {
+            _apiKeyStatus.value = ApiKeyStatus.Invalid(
+                "API Key belum diisi. Tambahkan GEMINI_API_KEY di file local.properties."
+            )
+            return
+        }
+
+        if (!::chatModel.isInitialized) {
+            _apiKeyStatus.value = ApiKeyStatus.Invalid(
+                "Gagal menginisialisasi model AI. Periksa koneksi internet dan API Key."
+            )
+            return
+        }
+
+        try {
+            withContext(Dispatchers.IO) {
+                withTimeout(VALIDATE_TIMEOUT_MS) {
+                    // Kirim request minimal untuk validasi key
+                    chatModel.generateContent(content { text("hi") })
+                }
+            }
+            _apiKeyStatus.value = ApiKeyStatus.Valid
+            Log.d(TAG, "✅ API Key valid")
+        } catch (e: Exception) {
+            val msg = e.message ?: ""
+            val reason = when {
+                msg.contains("API_KEY_INVALID", true) ||
+                        msg.contains("invalid api key", true) ||
+                        msg.contains("401") ->
+                    "API Key tidak valid atau sudah kadaluarsa.\n\nCek GEMINI_API_KEY di file local.properties, lalu rebuild project."
+
+                msg.contains("403") ->
+                    "API Key tidak punya akses ke model Gemini.\n\nPastikan Gemini API sudah diaktifkan di Google AI Studio."
+
+                msg.contains("QUOTA_EXCEEDED", true) ||
+                        msg.contains("429") ->
+                    // Quota habis tapi key valid — anggap valid
+                    null
+
+                e is java.net.UnknownHostException ->
+                    "Tidak ada koneksi internet.\n\nHubungkan ke internet untuk menggunakan fitur AI."
+
+                else -> null // Error lain → anggap key valid, biarkan error muncul saat chat
+            }
+
+            if (reason != null) {
+                _apiKeyStatus.value = ApiKeyStatus.Invalid(reason)
+                Log.e(TAG, "❌ API Key invalid: $reason")
+            } else {
+                _apiKeyStatus.value = ApiKeyStatus.Valid
+                Log.d(TAG, "✅ API Key dianggap valid (error: ${msg.take(60)})")
             }
         }
     }
@@ -604,7 +693,6 @@ class DebtViewModel(
                                 withContext(Dispatchers.IO) { repository.deleteTransaction(last.id) }
                             }
                         }
-
                         else -> Log.d(TAG, "Unknown action: ${match.groupValues[1]}")
                     }
                 }
@@ -802,7 +890,6 @@ class DebtViewModel(
     private fun addSystemMessage(text: String) = addAiMessage(text)
 
     fun getAllTransactions(): List<Transaction> = _transactions.value
-
 
     fun updateDeadlineFromSettings(newDeadline: String) {
         viewModelScope.launch {

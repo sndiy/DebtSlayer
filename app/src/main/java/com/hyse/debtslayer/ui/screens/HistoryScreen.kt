@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/ui/screens/HistoryScreen.kt
 package com.hyse.debtslayer.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility

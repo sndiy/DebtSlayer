@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/hyse/debtslayer/data/entity/ChatMessageEntity.kt
 package com.hyse.debtslayer.data.entity
 
 import androidx.room.Entity

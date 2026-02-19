@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/yourname/debtslayer/data/preferences/UserPreferences.kt
 package com.hyse.debtslayer.data.preferences
 
 import android.content.Context
