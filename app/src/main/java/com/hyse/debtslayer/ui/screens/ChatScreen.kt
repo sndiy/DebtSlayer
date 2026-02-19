@@ -8,14 +8,11 @@ import android.net.NetworkRequest
 import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SignalWifiOff
 import androidx.compose.material.icons.filled.Wifi
@@ -23,18 +20,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.hyse.debtslayer.ui.components.ChatBubble
 import com.hyse.debtslayer.ui.components.ChatInputField
 import com.hyse.debtslayer.ui.components.DebtProgressCard
 import com.hyse.debtslayer.viewmodel.DebtViewModel
+import com.hyse.debtslayer.viewmodel.LoadingStatus
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.callbackFlow
@@ -82,140 +76,91 @@ private fun isConnected(context: Context): Boolean {
     }
 }
 
-// ── No Internet Overlay ───────────────────────────────────────────────────────
+// ── Connection Banner — compact, satu baris ───────────────────────────────────
 @Composable
-fun NoInternetOverlay() {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f, targetValue = 1.12f,
-        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOut), RepeatMode.Reverse),
-        label = "pulseScale"
-    )
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.15f, targetValue = 0.3f,
-        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOut), RepeatMode.Reverse),
-        label = "pulseAlpha"
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0D0D0D).copy(alpha = 0.92f),
-                        Color(0xFF1A0000).copy(alpha = 0.96f)
-                    )
-                )
-            ),
-        contentAlignment = Alignment.Center
+fun ConnectionStatusBanner(isConnected: Boolean, showReconnected: Boolean) {
+    AnimatedVisibility(
+        visible = !isConnected || showReconnected,
+        enter = slideInVertically { -it } + fadeIn(tween(200)),
+        exit = slideOutVertically { -it } + fadeOut(tween(250))
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-            modifier = Modifier.padding(40.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Box(
-                    modifier = Modifier
-                        .size((120 * pulseScale).dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFEF5350).copy(alpha = pulseAlpha))
-                )
-                Box(
-                    modifier = Modifier
-                        .size(90.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFEF5350).copy(alpha = 0.18f))
-                )
-                Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFEF5350).copy(alpha = 0.25f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SignalWifiOff,
-                        contentDescription = "No Internet",
-                        tint = Color(0xFFEF9A9A),
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
-            }
+        val isOffline = !isConnected
+        val bgColor = if (isOffline) Color(0xFFB71C1C) else Color(0xFF1B5E20)
+        val icon = if (isOffline) Icons.Default.SignalWifiOff else Icons.Default.Wifi
+        // Saat offline: label utama + hint ketik help di satu baris
+        val text = if (isOffline)
+            "Tidak ada koneksi  •  ketik 'help'"
+        else
+            "Koneksi kembali! Mai siap diajak ngobrol."
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        Surface(color = bgColor, shadowElevation = 2.dp) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(15.dp)
+                )
                 Text(
-                    text = "Tidak Ada Koneksi",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+                    text = text,
+                    style = MaterialTheme.typography.labelMedium,
                     color = Color.White,
-                    textAlign = TextAlign.Center
+                    fontWeight = if (isOffline) FontWeight.Medium else FontWeight.Normal
                 )
-                Text(
-                    text = "Mai tidak bisa dihubungi sekarang.\nCek WiFi atau Data Seluler kamu.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center,
-                    lineHeight = 22.sp
-                )
-            }
-
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = Color(0xFFEF5350).copy(alpha = 0.2f)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFEF5350))
-                    )
-                    Text(
-                        text = "Offline",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFEF9A9A),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
             }
         }
     }
 }
 
-// ── Reconnected Banner ────────────────────────────────────────────────────────
+// ── Loading indicator ─────────────────────────────────────────────────────────
 @Composable
-fun ReconnectedBanner(visible: Boolean) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInVertically { -it } + fadeIn(),
-        exit = slideOutVertically { -it } + fadeOut()
+fun LoadingIndicator(status: LoadingStatus) {
+    val (labelText, indicatorColor) = when (status) {
+        LoadingStatus.CONNECTING ->
+            "Menghubungi Mai..." to MaterialTheme.colorScheme.primary
+        LoadingStatus.WAITING_RESPONSE ->
+            "Mai sedang mengetik..." to MaterialTheme.colorScheme.primary
+        LoadingStatus.FALLBACK_TRYING ->
+            "Model utama limit, beralih ke cadangan..." to MaterialTheme.colorScheme.tertiary
+        LoadingStatus.FALLBACK_CONNECTING ->
+            "Menghubungi Gemini Flash (cadangan)..." to MaterialTheme.colorScheme.tertiary
+        LoadingStatus.ERROR_BOTH_LIMIT ->
+            "Semua model limit, aktifkan mode offline..." to MaterialTheme.colorScheme.error
+        else -> return
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.CenterStart
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF2E7D32))
-                .padding(vertical = 8.dp, horizontal = 16.dp),
-            contentAlignment = Alignment.Center
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(Icons.Default.Wifi, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = indicatorColor
+            )
+            AnimatedContent(
+                targetState = labelText,
+                transitionSpec = {
+                    fadeIn(tween(200)) + slideInVertically { it / 3 } togetherWith fadeOut(tween(150))
+                },
+                label = "loading_label"
+            ) { label ->
                 Text(
-                    "Koneksi kembali! Mai siap diajak ngobrol.",
+                    text = label,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White,
-                    fontWeight = FontWeight.Medium
+                    color = indicatorColor.copy(alpha = 0.85f)
                 )
             }
         }
@@ -228,6 +173,7 @@ fun ChatScreen(viewModel: DebtViewModel) {
     val messages by viewModel.messages.collectAsState()
     val debtState by viewModel.debtState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val loadingStatus by viewModel.loadingStatus.collectAsState()
     val isDarkTheme = isSystemInDarkTheme()
     val depositConfirmation by viewModel.depositConfirmation.collectAsState()
     val isConnected by rememberNetworkState()
@@ -272,79 +218,50 @@ fun ChatScreen(viewModel: DebtViewModel) {
             SnackbarHost(hostState = snackbarHostState, modifier = Modifier.padding(bottom = 8.dp))
         }
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                ReconnectedBanner(visible = showReconnectedBanner)
+            // Banner tipis langsung di bawah AppBar
+            ConnectionStatusBanner(
+                isConnected = isConnected,
+                showReconnected = showReconnectedBanner
+            )
 
-                DebtProgressCard(debtState = debtState)
+            DebtProgressCard(debtState = debtState)
 
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(8.dp)
-                ) {
-                    items(messages, key = { it.messageId }) { message ->
-                        ChatBubble(
-                            message = message,
-                            isDarkTheme = isDarkTheme,
-                            onFeedback = if (!message.feedbackGiven) {
-                                { isPositive -> viewModel.giveFeedback(message.messageId, isPositive) }
-                            } else null,
-                            feedbackGiven = message.feedbackGiven,
-                            feedbackIsPositive = message.feedbackIsPositive
-                        )
-                    }
-
-                    if (isLoading) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Text(
-                                        "Mai sedang mengetik...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                    )
-                                }
-                            }
-                        }
-                    }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(8.dp)
+            ) {
+                items(messages, key = { it.messageId }) { message ->
+                    ChatBubble(
+                        message = message,
+                        isDarkTheme = isDarkTheme,
+                        onFeedback = if (!message.feedbackGiven) {
+                            { isPositive -> viewModel.giveFeedback(message.messageId, isPositive) }
+                        } else null,
+                        feedbackGiven = message.feedbackGiven,
+                        feedbackIsPositive = message.feedbackIsPositive
+                    )
                 }
 
-                // ChatInputField kini menerima isLoading dan onStop
-                ChatInputField(
-                    onSend = { text -> viewModel.sendMessage(text) },
-                    onStop = { viewModel.cancelPendingMessage() },
-                    enabled = isConnected,
-                    isLoading = isLoading
-                )
+                if (isLoading) {
+                    item { LoadingIndicator(status = loadingStatus) }
+                }
             }
 
-            AnimatedVisibility(
-                visible = !isConnected,
-                enter = fadeIn(animationSpec = tween(300)),
-                exit = fadeOut(animationSpec = tween(400)),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                NoInternetOverlay()
-            }
+            ChatInputField(
+                onSend = { text -> viewModel.sendMessage(text) },
+                onStop = { viewModel.cancelPendingMessage() },
+                enabled = isConnected,
+                isLoading = isLoading,
+                loadingStatus = loadingStatus
+            )
         }
     }
 }
