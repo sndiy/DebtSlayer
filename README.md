@@ -68,7 +68,7 @@ Buka project di Android Studio, sync Gradle, lalu jalankan di emulator atau devi
 
 ### Setup Pertama
 Saat pertama kali buka app, isi:
-- **Total hutang** yang ingin dilunasi (contoh: Rp 12.445.000)
+- **Total hutang** yang ingin dilunasi (contoh: Rp 100.000.000)
 - **Deadline pelunasan** — tanggal target hutang lunas
 
 Mai akan menghitung target setoran harian secara otomatis.
