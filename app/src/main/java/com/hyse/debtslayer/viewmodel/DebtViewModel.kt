@@ -65,7 +65,8 @@ enum class LoadingStatus {
 }
 
 // Enum untuk melacak model aktif saat ini
-private enum class ActiveModel { LITE, FLASH }
+
+enum class ActiveModel { LITE, FLASH }
 
 class DebtViewModel(
     private val repository: TransactionRepository,
@@ -145,7 +146,8 @@ class DebtViewModel(
     // ── Smart model switching ─────────────────────────────────────────────────
     // Ingat model terakhir yang berhasil — request berikutnya mulai dari sini.
     // Saat rate limit, selang-seling ke model lain tanpa animasi berulang.
-    private var preferredModel = ActiveModel.LITE
+    private val _activeModel = MutableStateFlow(ActiveModel.LITE)
+    val activeModel: StateFlow<ActiveModel> = _activeModel.asStateFlow()
 
     private var lastUserMessage = ""
     private var lastAiResponse = ""
@@ -688,7 +690,7 @@ AI normal kembali besok jam 07:00 WIB.
                 val contextMessage = buildContextMessage(userMessage)
 
                 val (primaryModel, secondaryModel, primaryEnum, secondaryEnum) =
-                    if (preferredModel == ActiveModel.LITE)
+                    if (_activeModel.value == ActiveModel.LITE)
                         Quad(chatModel, chatModelFallback, ActiveModel.LITE, ActiveModel.FLASH)
                     else
                         Quad(chatModelFallback, chatModel, ActiveModel.FLASH, ActiveModel.LITE)
@@ -700,7 +702,7 @@ AI normal kembali besok jam 07:00 WIB.
                 try {
                     response = tryGenerate(primaryModel, contextMessage)
                     // Sukses — simpan preferensi model ini
-                    preferredModel = primaryEnum
+                    _activeModel.value = primaryEnum
                 } catch (primaryEx: Exception) {
                     if (primaryEx is CancellationException) throw primaryEx
                     if (primaryEx is TimeoutCancellationException) throw primaryEx
@@ -717,7 +719,7 @@ AI normal kembali besok jam 07:00 WIB.
                     try {
                         response = tryGenerate(secondaryModel, contextMessage)
                         // Fallback berhasil — ganti preferensi ke model ini agar request berikutnya langsung ke sini
-                        preferredModel = secondaryEnum
+                        _activeModel.value = secondaryEnum
                         Log.d(TAG, "Switched preferred model to $secondaryEnum")
                     } catch (secondaryEx: Exception) {
                         if (secondaryEx is CancellationException) throw secondaryEx
@@ -823,6 +825,13 @@ AI normal kembali besok jam 07:00 WIB.
                 timestamp = System.currentTimeMillis(), wasSuccessful = wasSuccessful, context = ""
             ))
         } catch (e: Exception) { Log.e(TAG, "Error saving conversation: ${e.message}") }
+    }
+
+    fun clearChatHistory() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { chatMessageRepository.deleteAllMessages() }
+            _messages.value = emptyList()
+        }
     }
 
     fun giveFeedback(messageId: Long, isPositive: Boolean) {

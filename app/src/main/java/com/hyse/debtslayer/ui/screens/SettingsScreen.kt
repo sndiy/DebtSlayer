@@ -3,6 +3,7 @@ package com.hyse.debtslayer.ui.screens
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.hyse.debtslayer.personality.AdaptiveMaiPersonality
 import com.hyse.debtslayer.utils.CurrencyFormatter
+import com.hyse.debtslayer.viewmodel.ActiveModel
 import com.hyse.debtslayer.viewmodel.DebtViewModel
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -216,50 +218,294 @@ fun SettingsScreen(viewModel: DebtViewModel) {
             }
         }
 
-        // ── CARD: Conversation Learning ───────────────────────────
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            val conversationCount = remember { mutableStateOf(0) }
-            LaunchedEffect(Unit) {
-                viewModel.getConversationCount { count -> conversationCount.value = count }
+        // ── CARD: Model AI ────────────────────────────────────────
+        ModelInfoCard(viewModel = viewModel)
+
+        // ── CARD: Riwayat Percakapan ──────────────────────────────
+        ChatHistoryCard(viewModel = viewModel)
+
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+// ── Card Model Info ───────────────────────────────────────────────────────────
+@Composable
+fun ModelInfoCard(viewModel: DebtViewModel) {
+    val activeModel by viewModel.activeModel.collectAsState()
+    val isUsingFallback = activeModel == ActiveModel.FLASH
+    val activeModelName = if (isUsingFallback) DebtViewModel.MODEL_NAME_FALLBACK else DebtViewModel.MODEL_NAME
+    val activeLimits = if (isUsingFallback) DebtViewModel.MODEL_LIMITS_FALLBACK else DebtViewModel.MODEL_LIMITS
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isUsingFallback)
+                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+            else
+                MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(Icons.Default.SmartToy, "Model AI", tint = MaterialTheme.colorScheme.primary)
+                Text(
+                    "🤖 Model AI",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
             }
-            Column(modifier = Modifier.padding(16.dp)) {
+
+            // Badge model aktif
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isUsingFallback)
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                    else
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Default.MenuBook, "Learning", tint = MaterialTheme.colorScheme.primary)
-                    Text(
-                        "📚 Riwayat Percakapan",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                    // Dot animasi pulse
+                    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                    val alpha by infiniteTransition.animateFloat(
+                        initialValue = 0.4f, targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(900),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "dot_alpha"
                     )
+                    Surface(
+                        modifier = Modifier.size(10.dp),
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = (if (isUsingFallback) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.primary).copy(alpha = alpha)
+                    ) {}
+
+                    Column {
+                        Text(
+                            "Sedang Digunakan",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            activeModelName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (isUsingFallback)
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f)
+                        else
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            if (isUsingFallback) "Cadangan" else "Utama",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider()
+            ModelInfoRow("Limit Aktif", "${activeLimits.rpm} RPM  •  ${activeLimits.rpd} RPD")
+            HorizontalDivider()
+            ModelInfoRow("Model Utama", DebtViewModel.MODEL_NAME)
+            ModelInfoRow("Model Cadangan", DebtViewModel.MODEL_NAME_FALLBACK)
+        }
+    }
+}
+
+@Composable
+private fun ModelInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// ── Card Riwayat Chat ─────────────────────────────────────────────────────────
+@Composable
+fun ChatHistoryCard(viewModel: DebtViewModel) {
+    val conversationCount = remember { mutableStateOf(0) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showDeletedConfirm by remember { mutableStateOf(false) }
+
+    // Refresh count setiap kali card ini ditampilkan atau setelah hapus
+    val refreshTrigger = remember { mutableStateOf(0) }
+    LaunchedEffect(refreshTrigger.value) {
+        viewModel.getConversationCount { count -> conversationCount.value = count }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(Icons.Default.MenuBook, "Riwayat", tint = MaterialTheme.colorScheme.primary)
+                Text(
+                    "📚 Riwayat Percakapan",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Pesan otomatis dihapus setelah 7 hari. Kamu juga bisa menghapus manual kapan saja.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Total Percakapan Tersimpan:", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${conversationCount.value} percakapan",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // Tombol hapus — hanya aktif kalau ada percakapan
+            OutlinedButton(
+                onClick = { showDeleteDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = conversationCount.value > 0,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                border = ButtonDefaults.outlinedButtonBorder.copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(
+                        if (conversationCount.value > 0) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    )
+                )
+            ) {
+                Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Hapus Semua Riwayat Chat")
+            }
+
+            // Konfirmasi berhasil hapus
+            AnimatedVisibility(visible = showDeletedConfirm) {
+                LaunchedEffect(showDeletedConfirm) {
+                    if (showDeletedConfirm) {
+                        kotlinx.coroutines.delay(3000)
+                        showDeletedConfirm = false
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Percakapan kamu tersimpan selama 30 hari untuk referensi konteks.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Total Percakapan Tersimpan:", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "${conversationCount.value} percakapan",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "✅ Semua riwayat chat berhasil dihapus.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
         }
+    }
 
-        Spacer(Modifier.height(16.dp))
+    // Dialog konfirmasi hapus
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            icon = {
+                Icon(
+                    Icons.Default.DeleteForever,
+                    null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text("Hapus Riwayat Chat?", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Semua ${conversationCount.value} percakapan akan dihapus permanen. " +
+                            "Tindakan ini tidak bisa dibatalkan.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearChatHistory()
+                        showDeleteDialog = false
+                        showDeletedConfirm = true
+                        refreshTrigger.value++
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Hapus Semua")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 }
 
