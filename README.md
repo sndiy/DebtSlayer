@@ -2,6 +2,8 @@
 
 Aplikasi Android untuk melacak cicilan hutang harian dengan AI chatbot karakter **Sakurajima Mai** dari anime *Seishun Buta Yarou wa Bunny Girl Senpai*.
 
+⚡ **Powered by Gemini & Claude**
+
 ---
 
 ## ✨ Fitur Utama
