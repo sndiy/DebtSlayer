@@ -20,11 +20,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.hyse.debtslayer.personality.AdaptiveMaiPersonality
 import com.hyse.debtslayer.utils.CurrencyFormatter
 import com.hyse.debtslayer.viewmodel.DebtViewModel
-import com.hyse.debtslayer.viewmodel.TokenUsage
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -38,10 +36,6 @@ fun SettingsScreen(viewModel: DebtViewModel) {
     val debtState by viewModel.debtState.collectAsState()
     val customDeadline by viewModel.customDeadline.collectAsState()
     val totalDebt by viewModel.totalDebt.collectAsState()
-    val tokenUsage by viewModel.tokenUsage.collectAsState()
-    val rateLimitInfo by viewModel.rateLimitInfo.collectAsState()
-    val dailyTokenTotal by viewModel.dailyTokenTotal.collectAsState()
-    val dailyRequestCount by viewModel.dailyRequestCount.collectAsState()
     val reminderHour by viewModel.reminderHour.collectAsState(initial = 19)
     val reminderMinute by viewModel.reminderMinute.collectAsState(initial = 0)
     val context = LocalContext.current
@@ -64,13 +58,6 @@ fun SettingsScreen(viewModel: DebtViewModel) {
             customDeadline = customDeadline,
             totalDebt = totalDebt,
             viewModel = viewModel
-        )
-
-        TokenUsageCard(
-            tokenUsage = tokenUsage,
-            rateLimitInfo = rateLimitInfo,
-            dailyTokenTotal = dailyTokenTotal,
-            dailyRequestCount = dailyRequestCount
         )
 
         ReminderTimeCard(
@@ -481,169 +468,6 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } }
     )
-}
-
-// ── Card Token Usage ──────────────────────────────────────────────────────────
-@Composable
-fun TokenUsageCard(
-    tokenUsage: TokenUsage,
-    rateLimitInfo: com.hyse.debtslayer.viewmodel.RateLimitInfo?,
-    dailyTokenTotal: Long = 0L,
-    dailyRequestCount: Int = 0
-) {
-    var remainingSeconds by remember { mutableStateOf(rateLimitInfo?.remainingSeconds ?: 0L) }
-
-    LaunchedEffect(rateLimitInfo) {
-        remainingSeconds = rateLimitInfo?.remainingSeconds ?: 0L
-        if (rateLimitInfo != null && !rateLimitInfo.isDaily) {
-            while (remainingSeconds > 0) {
-                kotlinx.coroutines.delay(1000)
-                remainingSeconds = rateLimitInfo.remainingSeconds
-            }
-        }
-    }
-
-    val limits = DebtViewModel.MODEL_LIMITS
-    val numFmt = NumberFormat.getNumberInstance(Locale("id", "ID"))
-    val rpdUsageRatio = (dailyRequestCount.toFloat() / limits.rpd).coerceIn(0f, 1f)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                rateLimitInfo?.isDaily == true -> Color(0xFFF44336).copy(alpha = 0.08f)
-                rpdUsageRatio > 0.8f -> Color(0xFFFF9800).copy(alpha = 0.08f)
-                else -> MaterialTheme.colorScheme.surface
-            }
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(
-                    Icons.Default.Analytics, "Token",
-                    tint = if (rateLimitInfo != null) Color(0xFFF44336) else MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    when {
-                        rateLimitInfo?.isDaily == true -> "🚫 Limit Harian Tercapai"
-                        rateLimitInfo != null -> "⚠️ API Rate Limited (Per Menit)"
-                        else -> "📊 Penggunaan API"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            if (rateLimitInfo != null) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF44336).copy(alpha = 0.12f)),
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "🚫 ${rateLimitInfo.message}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFB71C1C)
-                        )
-                        if (rateLimitInfo.isDaily) {
-                            Text("Reset jam 07:00 WIB (00:00 UTC). Coba lagi besok.", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB71C1C))
-                        } else if (remainingSeconds > 0) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Coba lagi dalam:", style = MaterialTheme.typography.bodySmall)
-                                Text("${remainingSeconds}s", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = Color(0xFFB71C1C))
-                            }
-                            LinearProgressIndicator(
-                                progress = { (remainingSeconds.toFloat() / (rateLimitInfo.retryAfterMs / 1000f)).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth(),
-                                color = Color(0xFFF44336),
-                                trackColor = Color(0xFFF44336).copy(alpha = 0.2f)
-                            )
-                        } else {
-                            Text("✅ Sudah bisa dicoba lagi!", style = MaterialTheme.typography.bodySmall, color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-                HorizontalDivider()
-            }
-
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.small) {
-                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Model: ${limits.displayName} (Free Tier)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Limit:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("${limits.rpm} RPM  •  ${limits.rpd} RPD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-                            Text("${numFmt.format(limits.tpm)} TPM", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            HorizontalDivider()
-
-            Text("Request Harian (RPD)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Terpakai hari ini:", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "$dailyRequestCount / ${limits.rpd} request",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = when {
-                        rpdUsageRatio >= 1f -> Color(0xFFF44336)
-                        rpdUsageRatio > 0.7f -> Color(0xFFFF9800)
-                        else -> MaterialTheme.colorScheme.primary
-                    }
-                )
-            }
-            Column {
-                LinearProgressIndicator(
-                    progress = { rpdUsageRatio },
-                    modifier = Modifier.fillMaxWidth().height(10.dp),
-                    color = when {
-                        rpdUsageRatio >= 1f -> Color(0xFFF44336)
-                        rpdUsageRatio > 0.7f -> Color(0xFFFF9800)
-                        else -> MaterialTheme.colorScheme.primary
-                    },
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${(rpdUsageRatio * 100).toInt()}% terpakai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                    Text("Reset 07:00 WIB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                }
-            }
-
-            if (tokenUsage.sessionTotal > 0) {
-                HorizontalDivider()
-                Text("Token Sesi Ini", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TokenStatItem("Prompt", tokenUsage.promptTokens, MaterialTheme.colorScheme.primary)
-                    TokenStatItem("Respons", tokenUsage.candidateTokens, MaterialTheme.colorScheme.secondary)
-                    TokenStatItem("Total", tokenUsage.sessionTotal, MaterialTheme.colorScheme.tertiary)
-                }
-                if (dailyTokenTotal > 0) {
-                    val dailyTotal = dailyTokenTotal.coerceAtLeast(tokenUsage.sessionTotal.toLong())
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Total token hari ini:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        Text("${numFmt.format(dailyTotal)} / ${numFmt.format(limits.tpm)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            } else if (dailyRequestCount == 0) {
-                Text("Penggunaan API akan muncul setelah chat pertama.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-            }
-        }
-    }
-}
-
-@Composable
-fun TokenStatItem(label: String, value: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontSize = 10.sp)
-    }
 }
 
 @Composable

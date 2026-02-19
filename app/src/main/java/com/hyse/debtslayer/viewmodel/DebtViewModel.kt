@@ -55,27 +55,6 @@ data class DebtState(
     val daysRemaining: Int = 0
 )
 
-data class TokenUsage(
-    val promptTokens: Int = 0,
-    val candidateTokens: Int = 0,
-    val totalTokens: Int = 0,
-    val sessionTotal: Int = 0
-)
-
-data class RateLimitInfo(
-    val message: String,
-    val retryAfterMs: Long,
-    val isDaily: Boolean = false,
-    val triggeredAt: Long = System.currentTimeMillis()
-) {
-    val retryAtReadable: String get() {
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        return sdf.format(java.util.Date(triggeredAt + retryAfterMs))
-    }
-    val remainingSeconds: Long get() =
-        ((triggeredAt + retryAfterMs) - System.currentTimeMillis()).div(1000).coerceAtLeast(0)
-}
-
 enum class LoadingStatus {
     IDLE,
     CONNECTING,           // "Menghubungi Mai..."
@@ -138,18 +117,6 @@ class DebtViewModel(
 
     private val _totalDebt = MutableStateFlow(0L)
     val totalDebt: StateFlow<Long> = _totalDebt.asStateFlow()
-
-    private val _tokenUsage = MutableStateFlow(TokenUsage())
-    val tokenUsage: StateFlow<TokenUsage> = _tokenUsage.asStateFlow()
-
-    private val _dailyTokenTotal = MutableStateFlow(0L)
-    val dailyTokenTotal: StateFlow<Long> = _dailyTokenTotal.asStateFlow()
-
-    private val _dailyRequestCount = MutableStateFlow(0)
-    val dailyRequestCount: StateFlow<Int> = _dailyRequestCount.asStateFlow()
-
-    private val _rateLimitInfo = MutableStateFlow<RateLimitInfo?>(null)
-    val rateLimitInfo: StateFlow<RateLimitInfo?> = _rateLimitInfo.asStateFlow()
 
     private val _depositConfirmation = MutableStateFlow<Long?>(null)
     val depositConfirmation: StateFlow<Long?> = _depositConfirmation.asStateFlow()
@@ -339,12 +306,6 @@ class DebtViewModel(
             val savedTotalDebt = preferencesRepository.customTotalDebt.firstOrNull()
             if (savedTotalDebt != null && savedTotalDebt > 0) _totalDebt.value = savedTotalDebt
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
-            preferencesRepository.dailyTokenData.firstOrNull()?.let { (total, date) ->
-                _dailyTokenTotal.value = if (date == today) total else 0L
-            }
-            preferencesRepository.dailyRequestData.firstOrNull()?.let { (count, date) ->
-                _dailyRequestCount.value = if (date == today) count else 0
-            }
             val savedSetupDate = preferencesRepository.setupDate.firstOrNull()
             if (!savedSetupDate.isNullOrBlank()) _setupDate.value = savedSetupDate
         } catch (e: Exception) { Log.e(TAG, "Error loading preferences: ${e.message}") }
@@ -658,28 +619,6 @@ AI normal kembali besok jam 07:00 WIB.
         """.trimIndent()
     }
 
-    private suspend fun updateTokenUsage(
-        response: com.google.ai.client.generativeai.type.GenerateContentResponse
-    ) {
-        response.usageMetadata?.let { usage ->
-            val thisTotal = usage.totalTokenCount ?: 0
-            val prev = _tokenUsage.value
-            _tokenUsage.value = TokenUsage(
-                promptTokens = usage.promptTokenCount ?: 0,
-                candidateTokens = usage.candidatesTokenCount ?: 0,
-                totalTokens = thisTotal,
-                sessionTotal = prev.sessionTotal + thisTotal
-            )
-            if (thisTotal > 0) {
-                withContext(Dispatchers.IO) { preferencesRepository.addDailyTokens(thisTotal) }
-                val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
-                preferencesRepository.dailyTokenData.firstOrNull()?.let { (total, date) ->
-                    _dailyTokenTotal.value = if (date == today) total else thisTotal.toLong()
-                }
-            }
-        }
-    }
-
     private suspend fun processAiResponse(userMessage: String, aiResponse: String) {
         lastAiResponse = aiResponse
         withContext(Dispatchers.IO) { saveConversation(userMessage, aiResponse, true) }
@@ -806,9 +745,6 @@ AI normal kembali besok jam 07:00 WIB.
 
                 // Jika ada response dari API
                 response?.let {
-                    _dailyRequestCount.value += 1
-                    withContext(Dispatchers.IO) { preferencesRepository.incrementDailyRequest() }
-                    updateTokenUsage(it)
                     processAiResponse(userMessage, it.text ?: "Maaf, aku tidak bisa merespons.")
                 }
 
@@ -846,23 +782,13 @@ AI normal kembali besok jam 07:00 WIB.
         return when {
             msg.contains("429") || msg.contains("quota", true) ||
                     msg.contains("rate", true) || msg.contains("RESOURCE_EXHAUSTED", true) -> {
-                val isRpdLimit = _dailyRequestCount.value >= MODEL_LIMITS.rpd
-                        || msg.contains("per_day", true) || msg.contains("daily", true)
-                        || msg.contains("RPD", true)
-                        || (msg.contains("quota", true) && msg.contains("day", true))
+                val isRpdLimit = msg.contains("per_day", true) || msg.contains("daily", true) ||
+                        msg.contains("RPD", true) || (msg.contains("quota", true) && msg.contains("day", true))
                 if (isRpdLimit) {
-                    val msUntilReset = getMillisUntilMidnightUtc()
-                    _rateLimitInfo.value = RateLimitInfo("Limit harian (RPD) tercapai", msUntilReset, true)
-                    viewModelScope.launch { delay(msUntilReset + 1_000); _rateLimitInfo.value = null }
                     "Limit harian API habis. Reset jam 07:00 WIB. " +
                             "Upgrade billing di Google AI Studio untuk limit lebih tinggi."
                 } else {
-                    val retrySeconds = extractRetrySeconds(msg).coerceAtLeast(60L)
-                    val retryMs = retrySeconds * 1_000L
-                    _rateLimitInfo.value = RateLimitInfo("Limit per menit (RPM) tercapai", retryMs, false)
-                    viewModelScope.launch { delay(retryMs + 1_000); _rateLimitInfo.value = null }
-                    "Terlalu banyak pesan dalam 1 menit (maks ${MODEL_LIMITS.rpm}/menit). " +
-                            "Tunggu ${retrySeconds}s lalu coba lagi."
+                    "Terlalu banyak pesan dalam 1 menit. Tunggu sebentar lalu coba lagi."
                 }
             }
             msg.contains("API key", true) || msg.contains("401") ->
@@ -876,7 +802,6 @@ AI normal kembali besok jam 07:00 WIB.
             else -> "Error: ${msg.take(120)}. Coba lagi ya!"
         }
     }
-
     private fun extractRetrySeconds(errorMsg: String): Long {
         val patterns = listOf(
             """retry.{0,20}(\d+)\s*s""".toRegex(RegexOption.IGNORE_CASE),
