@@ -558,9 +558,30 @@ AI normal kembali besok jam 07:00 WIB.
 
             // ── Chat biasa → tampilkan info hutang ───────────────────────────
             else -> {
-                val summary = buildDebtSummary()
-                addAiMessage(summary)
-                withContext(Dispatchers.IO) { saveConversation(userMessage, summary, true) }
+                val lower2 = userMessage.lowercase()
+                val response = when {
+                    lower2.contains("halo") || lower2.contains("hai") || lower2.contains("hello") ||
+                            lower2.contains("hi") || lower2.contains("p") ->
+                        listOf(
+                            "Ya, ada apa. Sudah setor hari ini?",
+                            "Hmm. Ngapain sapa-sapa, hutangmu masih numpuk.",
+                            "Ada yang perlu diurus? Kalau tidak, setor dulu sana."
+                        ).random()
+
+                    lower2.contains("makasih") || lower2.contains("terima kasih") ->
+                        "Jangan makasih dulu sebelum hutangnya lunas."
+
+                    lower2.contains("semangat") || lower2.contains("ayo") ->
+                        "Semangat saja tidak cukup. Butuh uangnya juga."
+
+                    lower2.contains("capek") || lower2.contains("lelah") || lower2.contains("stress") ->
+                        "Capek boleh, tapi hutang tidak ikut capek. Istirahat sebentar, lanjut lagi."
+
+                    else ->
+                        "Ketik 'info' untuk lihat status hutang, atau 'setor [nominal]' untuk mencatat setoran."
+                }
+                addAiMessage(response)
+                withContext(Dispatchers.IO) { saveConversation(userMessage, response, true) }
             }
         }
     }
