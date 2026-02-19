@@ -76,13 +76,6 @@ data class RateLimitInfo(
         ((triggeredAt + retryAfterMs) - System.currentTimeMillis()).div(1000).coerceAtLeast(0)
 }
 
-// ── Status validasi API Key ────────────────────────────────────────────────────
-sealed class ApiKeyStatus {
-    object Checking : ApiKeyStatus()
-    object Valid : ApiKeyStatus()
-    data class Invalid(val reason: String) : ApiKeyStatus()
-}
-
 class DebtViewModel(
     private val repository: TransactionRepository,
     private val feedbackRepository: FeedbackRepository,
@@ -149,16 +142,11 @@ class DebtViewModel(
     private val _isDataReady = MutableStateFlow(false)
     val isDataReady: StateFlow<Boolean> = _isDataReady.asStateFlow()
 
-    private val _pendingFirstSetupGreeting = MutableStateFlow(false)
-    val pendingFirstSetupGreeting: StateFlow<Boolean> = _pendingFirstSetupGreeting.asStateFlow()
-
-    // ── API Key validation status ──────────────────────────────────────────────
-    private val _apiKeyStatus = MutableStateFlow<ApiKeyStatus>(ApiKeyStatus.Checking)
-    val apiKeyStatus: StateFlow<ApiKeyStatus> = _apiKeyStatus.asStateFlow()
-
-    // Step loading yang sedang berjalan (untuk LoadingScreen)
     private val _loadingStep = MutableStateFlow(0)
     val loadingStep: StateFlow<Int> = _loadingStep.asStateFlow()
+
+    private val _pendingFirstSetupGreeting = MutableStateFlow(false)
+    val pendingFirstSetupGreeting: StateFlow<Boolean> = _pendingFirstSetupGreeting.asStateFlow()
 
     val isOnboardingDone = preferencesRepository.isOnboardingDone
     val initialDeadline = preferencesRepository.initialDeadline
@@ -175,11 +163,16 @@ class DebtViewModel(
     private var lastAiResponse = ""
     private var activeMessageJob: Job? = null
 
+    // ── Cooldown: satu sumber kebenaran, hanya di ViewModel ──────────────────
+    // UI cukup observe isLoading untuk disable tombol saat proses berjalan.
+    // Cooldown antar-request (RPM guard) = 4 detik, dihitung dari selesainya request.
+    private var lastRequestFinishedAt = 0L
+    private val MIN_REQUEST_INTERVAL_MS = 4_000L
+
     companion object {
         private const val TAG = "DebtViewModel"
-        const val MODEL_NAME = "gemini-2.5-flash-lite"
+        const val MODEL_NAME = "gemini-2.5-flash"
         private const val REQUEST_TIMEOUT_MS = 30_000L
-        private const val VALIDATE_TIMEOUT_MS = 10_000L
 
         val MODEL_LIMITS = ModelLimits(
             rpm = 10,
@@ -200,11 +193,9 @@ class DebtViewModel(
 
     init {
         viewModelScope.launch {
-            // Step 1: Preferensi
             _loadingStep.value = 0
             loadPreferences()
 
-            // Step 2: Data transaksi
             _loadingStep.value = 1
             val firstTransactions = withContext(Dispatchers.IO) {
                 repository.allTransactions.firstOrNull() ?: emptyList()
@@ -212,24 +203,20 @@ class DebtViewModel(
             _transactions.value = firstTransactions
             recalculateDebtState(firstTransactions)
 
-            // Step 3: Riwayat chat
             _loadingStep.value = 2
             loadChatHistory()
 
-            // Step 4: Inisialisasi model AI
             _loadingStep.value = 3
             initAIModel(apiKey)
 
-            // Step 5: Validasi API Key
             _loadingStep.value = 4
-            validateApiKey()
-
-            // Step 6: Feedback stats + cleanup
-            _loadingStep.value = 5
             loadFeedbackStats()
+
+            _loadingStep.value = 5
             cleanupOldData()
 
-            delay(300)
+            _loadingStep.value = 6
+            delay(100)
             _isDataReady.value = true
         }
 
@@ -241,66 +228,9 @@ class DebtViewModel(
         }
     }
 
-    // ── Validasi API Key dengan test request ───────────────────────────────────
-    private suspend fun validateApiKey() {
+    private fun initAIModel(apiKey: String) {
         if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY_HERE") {
-            _apiKeyStatus.value = ApiKeyStatus.Invalid(
-                "API Key belum diisi. Tambahkan GEMINI_API_KEY di file local.properties."
-            )
-            return
-        }
-
-        if (!::chatModel.isInitialized) {
-            _apiKeyStatus.value = ApiKeyStatus.Invalid(
-                "Gagal menginisialisasi model AI. Periksa koneksi internet dan API Key."
-            )
-            return
-        }
-
-        try {
-            withContext(Dispatchers.IO) {
-                withTimeout(VALIDATE_TIMEOUT_MS) {
-                    // Kirim request minimal untuk validasi key
-                    chatModel.generateContent(content { text("hi") })
-                }
-            }
-            _apiKeyStatus.value = ApiKeyStatus.Valid
-            Log.d(TAG, "✅ API Key valid")
-        } catch (e: Exception) {
-            val msg = e.message ?: ""
-            val reason = when {
-                msg.contains("API_KEY_INVALID", true) ||
-                        msg.contains("invalid api key", true) ||
-                        msg.contains("401") ->
-                    "API Key tidak valid atau sudah kadaluarsa.\n\nCek GEMINI_API_KEY di file local.properties, lalu rebuild project."
-
-                msg.contains("403") ->
-                    "API Key tidak punya akses ke model Gemini.\n\nPastikan Gemini API sudah diaktifkan di Google AI Studio."
-
-                msg.contains("QUOTA_EXCEEDED", true) ||
-                        msg.contains("429") ->
-                    // Quota habis tapi key valid — anggap valid
-                    null
-
-                e is java.net.UnknownHostException ->
-                    "Tidak ada koneksi internet.\n\nHubungkan ke internet untuk menggunakan fitur AI."
-
-                else -> null // Error lain → anggap key valid, biarkan error muncul saat chat
-            }
-
-            if (reason != null) {
-                _apiKeyStatus.value = ApiKeyStatus.Invalid(reason)
-                Log.e(TAG, "❌ API Key invalid: $reason")
-            } else {
-                _apiKeyStatus.value = ApiKeyStatus.Valid
-                Log.d(TAG, "✅ API Key dianggap valid (error: ${msg.take(60)})")
-            }
-        }
-    }
-
-    private suspend fun initAIModel(apiKey: String) {
-        if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY_HERE") {
-            Log.e(TAG, "API Key belum diisi!")
+            Log.w(TAG, "API Key not configured")
             return
         }
         try {
@@ -315,9 +245,9 @@ class DebtViewModel(
                 },
                 systemInstruction = content { text(getSystemInstruction()) }
             )
-            Log.d(TAG, "AI model ready: $MODEL_NAME")
+            Log.d(TAG, "AI model initialized: $MODEL_NAME")
         } catch (e: Exception) {
-            Log.e(TAG, "Error init AI: ${e.javaClass.simpleName} - ${e.message}", e)
+            Log.e(TAG, "Error creating AI model: ${e.message}")
         }
     }
 
@@ -353,31 +283,24 @@ class DebtViewModel(
         return when {
             state.daysRemaining <= 0 && state.remainingDebt > 0 ->
                 "DEADLINE SUDAH LEWAT. Sisa hutang $remainingStr harus dibayar SEKARANG. Tidak ada alasan."
-
             state.remainingDebt <= 0 -> listOf(
                 "Hutang lunas. Hmm. Tidak kusangka kamu bisa sampai sini — jangan sombong dulu.",
                 "Selesai. Semua lunas. ...Bagus. Jangan bikin hutang baru lagi, dengar tidak?",
                 "Lunas. Aku tidak akan bilang aku bangga, tapi... ya. Kamu berhasil.",
                 "Hutangnya lunas. Rasanya aneh tidak punya yang harus ditagih ke kamu."
             ).random()
-
             _transactions.value.isEmpty() ->
                 "Hai. Aku Sakurajima Mai. Kamu punya hutang $remainingStr yang harus lunas dalam ${state.daysRemaining} hari. " +
                         "Target harian kamu $targetStr. Kalau mau setor, langsung bilang nominalnya dan ketik \"setor\" atau \"nabung\"."
-
             state.daysRemaining <= 7 && state.remainingDebt > 0 ->
                 "Tinggal ${state.daysRemaining} hari. Sisa $remainingStr. Aku tidak mau dengar alasan — setor sekarang."
-
             todayDeposit >= state.dailyTarget && todayDeposit > 0 ->
                 "Kamu sudah setor ${CurrencyFormatter.format(todayDeposit)} hari ini. Lumayan, target tercapai. Sisa hutang $remainingStr."
-
             todayDeposit in 1 until state.dailyTarget ->
                 "Sudah setor ${CurrencyFormatter.format(todayDeposit)} hari ini. " +
                         "Masih kurang ${CurrencyFormatter.format(state.dailyTarget - todayDeposit)} dari target $targetStr."
-
             todayDeposit == 0L ->
                 "Belum setor hari ini. Target $targetStr. Sisa hutang $remainingStr. Jangan nunggu sampai malam."
-
             else -> "Hai. Sisa hutang $remainingStr. Target hari ini $targetStr."
         }
     }
@@ -405,28 +328,21 @@ class DebtViewModel(
                     Log.e(TAG, "Unknown personality mode: $savedMode")
                 }
             }
-
             val savedDeadline = preferencesRepository.customDeadline.firstOrNull()
             if (!savedDeadline.isNullOrBlank()) _customDeadline.value = savedDeadline
-
             _positiveFeedbackCount.value = preferencesRepository.positiveFeedbackCount.firstOrNull() ?: 0
             _negativeFeedbackCount.value = preferencesRepository.negativeFeedbackCount.firstOrNull() ?: 0
-
             val savedTotalDebt = preferencesRepository.customTotalDebt.firstOrNull()
             if (savedTotalDebt != null && savedTotalDebt > 0) _totalDebt.value = savedTotalDebt
-
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
             preferencesRepository.dailyTokenData.firstOrNull()?.let { (total, date) ->
                 _dailyTokenTotal.value = if (date == today) total else 0L
             }
-
             preferencesRepository.dailyRequestData.firstOrNull()?.let { (count, date) ->
                 _dailyRequestCount.value = if (date == today) count else 0
             }
-
             val savedSetupDate = preferencesRepository.setupDate.firstOrNull()
             if (!savedSetupDate.isNullOrBlank()) _setupDate.value = savedSetupDate
-
         } catch (e: Exception) {
             Log.e(TAG, "Error loading preferences: ${e.message}")
         }
@@ -450,17 +366,14 @@ class DebtViewModel(
             val remaining = (activeTotalDebt - totalPaid).coerceAtLeast(0L)
             val progress = if (activeTotalDebt > 0)
                 (totalPaid.toFloat() / activeTotalDebt * 100f).coerceAtMost(100f) else 0f
-
             val activeDeadline = deadlineOverride ?: _customDeadline.value ?: getActiveDeadline()
             val targetDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(activeDeadline)
             val daysRemaining = (((targetDate?.time ?: 0) - System.currentTimeMillis()) / (1000L * 60 * 60 * 24)).toInt()
-
             val dailyTarget = when {
                 remaining <= 0 -> 0L
                 daysRemaining <= 0 -> remaining
                 else -> CurrencyFormatter.ceilToThousand((remaining + daysRemaining - 1) / daysRemaining)
             }
-
             _debtState.value = DebtState(
                 totalDebt = activeTotalDebt,
                 totalPaid = totalPaid,
@@ -469,7 +382,6 @@ class DebtViewModel(
                 daysRemaining = daysRemaining,
                 dailyTarget = dailyTarget
             )
-
             if (remaining <= 0L) {
                 com.hyse.debtslayer.notification.DailyReminderScheduler.cancel(context)
             } else {
@@ -483,7 +395,6 @@ class DebtViewModel(
     private fun getSystemInstruction(): String {
         val mode = _personalityMode.value
         val state = _debtState.value
-
         return """
         Kamu adalah Sakurajima Mai dari anime Seishun Buta Yarou wa Bunny Girl Senpai no Yume wo Minai.
         Karakter: Tsundere — galak di luar, peduli di dalam. Tidak suka mengakui perasaan.
@@ -594,23 +505,38 @@ class DebtViewModel(
 
     fun dismissDepositConfirmation() { _depositConfirmation.value = null }
 
+    /**
+     * Hentikan request AI yang sedang berjalan.
+     * Dipanggil dari tombol Stop di UI.
+     */
     fun cancelPendingMessage() {
         if (activeMessageJob?.isActive == true) {
             activeMessageJob?.cancel()
-            Log.d(TAG, "Active message job cancelled")
+            Log.d(TAG, "Active message job cancelled by user")
         }
     }
 
     fun sendMessage(userMessage: String) {
         if (userMessage.isBlank()) return
 
-        activeMessageJob?.cancel()
+        // Jika sedang loading, tolak — UI seharusnya sudah disable tombol kirim
+        if (_isLoading.value) return
 
+        // Guard cooldown antar-request (RPM protection), dihitung dari selesainya request sebelumnya
+        val sinceLastFinished = System.currentTimeMillis() - lastRequestFinishedAt
+        if (lastRequestFinishedAt != 0L && sinceLastFinished < MIN_REQUEST_INTERVAL_MS) return
+
+        activeMessageJob?.cancel()
         activeMessageJob = viewModelScope.launch(Dispatchers.Main) {
+            _isLoading.value = true
             try {
-                _isLoading.value = true
                 addUserMessage(userMessage)
                 lastUserMessage = userMessage
+
+                if (!::chatModel.isInitialized) {
+                    addAiMessage("AI belum siap. Pastikan API Key sudah dikonfigurasi di local.properties.")
+                    return@launch
+                }
 
                 if (!withContext(Dispatchers.IO) { isNetworkAvailable() }) {
                     addAiMessage("Tidak ada koneksi internet. Cek WiFi/Data!")
@@ -630,13 +556,11 @@ class DebtViewModel(
                 val currentState = _debtState.value
                 val contextMessage = """
                     User: $userMessage
-                    
                     Status hutang sekarang:
                     - Sudah dibayar: ${CurrencyFormatter.format(currentState.totalPaid)}
                     - Sisa hutang: ${CurrencyFormatter.format(currentState.remainingDebt)}
                     - Target hari ini: ${CurrencyFormatter.format(currentState.dailyTarget)}
                     - Hari tersisa: ${currentState.daysRemaining} hari
-                    
                     Respons sebagai Mai (max 2 kalimat, tsundere, cool).
                     WAJIB tambahkan [ACTION:TIPE:NILAI] di baris terakhir.
                 """.trimIndent()
@@ -685,7 +609,7 @@ class DebtViewModel(
                                 withContext(Dispatchers.IO) { saveTransaction(amount, "Chat dengan Mai") }
                                 _depositConfirmation.value = amount
                             } else {
-                                Log.d(TAG, "Unknown action: ${match.groupValues[1]}")
+                                Log.d(TAG, "Invalid deposit amount: ${match.groupValues[2]}")
                             }
                         }
                         "DELETE_LAST" -> {
@@ -700,68 +624,96 @@ class DebtViewModel(
                 addAiMessage(cleanResponse.ifBlank { aiResponse })
 
             } catch (e: TimeoutCancellationException) {
-                Log.w(TAG, "Request timed out after ${REQUEST_TIMEOUT_MS}ms")
                 addAiMessage("Koneksi terputus saat menunggu respons. Cek internet lalu coba lagi.")
                 withContext(Dispatchers.IO) { saveConversation(userMessage, "timeout", false) }
             } catch (e: CancellationException) {
-                Log.d(TAG, "Message job cancelled")
+                // User menekan Stop — tidak perlu pesan error
+                Log.d(TAG, "Message job cancelled by user")
             } catch (e: Exception) {
                 val errorMessage = handleApiError(e)
                 addAiMessage(errorMessage)
                 withContext(Dispatchers.IO) { saveConversation(userMessage, errorMessage, false) }
             } finally {
+                lastRequestFinishedAt = System.currentTimeMillis()
                 _isLoading.value = false
             }
         }
     }
 
     private fun getMillisUntilMidnightUtc(): Long {
-        val now = System.currentTimeMillis()
         val cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             add(Calendar.DAY_OF_MONTH, 1)
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
         }
-        return (cal.timeInMillis - now).coerceAtLeast(60_000L)
+        return (cal.timeInMillis - System.currentTimeMillis()).coerceAtLeast(60_000L)
     }
 
     private fun handleApiError(e: Exception): String {
         val msg = e.message ?: ""
+
         return when {
             msg.contains("429") || msg.contains("quota", true) ||
                     msg.contains("rate", true) || msg.contains("RESOURCE_EXHAUSTED", true) -> {
-                val retrySeconds = extractRetrySeconds(msg)
-                val isRpdLimit = msg.contains("day", true) || msg.contains("daily", true) ||
-                        msg.contains("RPD", true) || _dailyRequestCount.value >= MODEL_LIMITS.rpd
+
+                // ── Deteksi RPD dulu (prioritas) ──────────────────────────────────────
+                // Ciri khas error RPD dari Gemini: menyebut "day", "daily", "per_day",
+                // atau counter lokal kita sudah menyentuh/melewati limit.
+                val isRpdLimit = _dailyRequestCount.value >= MODEL_LIMITS.rpd
+                        || msg.contains("per_day", true)
+                        || msg.contains("daily", true)
+                        || msg.contains("RPD", true)
+                        // Gemini kadang menyebut "quota" + "day" bersamaan
+                        || (msg.contains("quota", true) && msg.contains("day", true))
 
                 if (isRpdLimit) {
                     val msUntilReset = getMillisUntilMidnightUtc()
                     _rateLimitInfo.value = RateLimitInfo(
-                        message = "Limit harian tercapai (${_dailyRequestCount.value}/${MODEL_LIMITS.rpd} request/hari)",
+                        message = "Limit harian (RPD) tercapai",
                         retryAfterMs = msUntilReset,
                         isDaily = true
                     )
-                    viewModelScope.launch { delay(msUntilReset + 1000); _rateLimitInfo.value = null }
-                    "Limit harian API habis (${_dailyRequestCount.value}/${MODEL_LIMITS.rpd} request/hari). Reset jam 07:00 WIB."
+                    viewModelScope.launch { delay(msUntilReset + 1_000); _rateLimitInfo.value = null }
+
+                    val resetHour = "07:00 WIB"
+                    "Limit harian API habis (${_dailyRequestCount.value}/${MODEL_LIMITS.rpd} request/hari). " +
+                            "Reset jam $resetHour. Upgrade billing di Google AI Studio untuk limit lebih tinggi."
+
                 } else {
-                    val retryMs = (retrySeconds * 1000L).coerceAtLeast(60_000L)
+                    // ── RPM (per-menit) ────────────────────────────────────────────────
+                    val retrySeconds = extractRetrySeconds(msg).coerceAtLeast(60L)
+                    val retryMs = retrySeconds * 1_000L
                     _rateLimitInfo.value = RateLimitInfo(
                         message = "Limit per menit (RPM) tercapai",
                         retryAfterMs = retryMs,
                         isDaily = false
                     )
-                    viewModelScope.launch { delay(retryMs + 1000); _rateLimitInfo.value = null }
-                    "Terlalu banyak pesan dalam 1 menit. Tunggu ${retrySeconds}s (maks ${MODEL_LIMITS.rpm} pesan/menit)."
+                    viewModelScope.launch { delay(retryMs + 1_000); _rateLimitInfo.value = null }
+
+                    "Terlalu banyak pesan dalam 1 menit (maks ${MODEL_LIMITS.rpm}/menit). " +
+                            "Tunggu ${retrySeconds}s lalu coba lagi."
                 }
             }
-            msg.contains("API key", true) || msg.contains("401") -> "API Key tidak valid. Cek GEMINI_API_KEY di local.properties."
-            msg.contains("404") -> "Model tidak ditemukan. Cek koneksi dan coba lagi."
-            e is java.net.UnknownHostException -> "Tidak bisa konek ke Gemini. Cek internet."
-            e is java.net.SocketTimeoutException -> "Koneksi timeout. Coba lagi."
-            msg.contains("500") || msg.contains("503") -> "Server Gemini bermasalah. Tunggu lalu coba lagi."
-            else -> "Error: ${msg.take(100)}. Coba lagi ya!"
+
+            msg.contains("API key", true) || msg.contains("401") ->
+                "API Key tidak valid. Cek GEMINI_API_KEY di local.properties."
+
+            msg.contains("403") ->
+                "Akses ditolak. Pastikan API Key punya izin untuk Gemini API."
+
+            msg.contains("404") ->
+                "Model tidak ditemukan. Cek nama model atau koneksi internet."
+
+            e is java.net.UnknownHostException ->
+                "Tidak bisa konek ke Gemini. Cek koneksi internet."
+
+            e is java.net.SocketTimeoutException ->
+                "Koneksi timeout. Coba lagi."
+
+            msg.contains("500") || msg.contains("503") ->
+                "Server Gemini sedang bermasalah. Tunggu sebentar lalu coba lagi."
+
+            else -> "Error: ${msg.take(120)}. Coba lagi ya!"
         }
     }
 
@@ -781,15 +733,10 @@ class DebtViewModel(
 
     private suspend fun saveConversation(userMsg: String, aiResp: String, wasSuccessful: Boolean) {
         try {
-            conversationRepository.insert(
-                ConversationHistory(
-                    userMessage = userMsg,
-                    aiResponse = aiResp,
-                    timestamp = System.currentTimeMillis(),
-                    wasSuccessful = wasSuccessful,
-                    context = ""
-                )
-            )
+            conversationRepository.insert(ConversationHistory(
+                userMessage = userMsg, aiResponse = aiResp,
+                timestamp = System.currentTimeMillis(), wasSuccessful = wasSuccessful, context = ""
+            ))
         } catch (e: Exception) { Log.e(TAG, "Error saving conversation: ${e.message}") }
     }
 
@@ -799,42 +746,30 @@ class DebtViewModel(
                 msg.copy(feedbackGiven = true, feedbackIsPositive = isPositive)
             else msg
         }
-
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { chatMessageRepository.saveFeedback(messageId, isPositive) }
-
                 val ctx = JSONObject().apply {
                     put("totalPaid", _debtState.value.totalPaid)
                     put("remaining", _debtState.value.remainingDebt)
                     put("target", _debtState.value.dailyTarget)
                     put("personalityMode", _personalityMode.value.name)
                 }.toString()
-
                 withContext(Dispatchers.IO) {
-                    feedbackRepository.insert(
-                        ConversationFeedback(
-                            userMessage = lastUserMessage,
-                            aiResponse = lastAiResponse,
-                            isPositive = isPositive,
-                            timestamp = System.currentTimeMillis(),
-                            context = ctx
-                        )
-                    )
+                    feedbackRepository.insert(ConversationFeedback(
+                        userMessage = lastUserMessage, aiResponse = lastAiResponse,
+                        isPositive = isPositive, timestamp = System.currentTimeMillis(), context = ctx
+                    ))
                 }
-
                 if (isPositive) _positiveFeedbackCount.value += 1
                 else _negativeFeedbackCount.value += 1
-
             } catch (e: Exception) { Log.e(TAG, "Error saving feedback: ${e.message}") }
         }
     }
 
     fun setPersonalityMode(mode: AdaptiveMaiPersonality.PersonalityMode) {
         _personalityMode.value = mode
-        viewModelScope.launch(Dispatchers.IO) {
-            preferencesRepository.savePersonalityMode(mode.name)
-        }
+        viewModelScope.launch(Dispatchers.IO) { preferencesRepository.savePersonalityMode(mode.name) }
         rebuildChatModel()
     }
 
@@ -842,13 +777,9 @@ class DebtViewModel(
         if (apiKey.isBlank() || apiKey == "YOUR_GEMINI_API_KEY_HERE") return
         try {
             chatModel = GenerativeModel(
-                modelName = MODEL_NAME,
-                apiKey = apiKey,
+                modelName = MODEL_NAME, apiKey = apiKey,
                 generationConfig = generationConfig {
-                    temperature = 0.8f
-                    topK = 30
-                    topP = 0.9f
-                    maxOutputTokens = 500
+                    temperature = 0.8f; topK = 30; topP = 0.9f; maxOutputTokens = 500
                 },
                 systemInstruction = content { text(getSystemInstruction()) }
             )
@@ -927,10 +858,14 @@ class DebtViewModel(
         viewModelScope.launch {
             _isDataReady.value = false
             _pendingFirstSetupGreeting.value = true
+            _loadingStep.value = 0
+
             withContext(Dispatchers.IO) { chatMessageRepository.deleteAllMessages() }
             _messages.value = emptyList()
             _totalDebt.value = totalDebt
             _customDeadline.value = deadline
+
+            _loadingStep.value = 1
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
             _setupDate.value = today
             withContext(Dispatchers.IO) {
@@ -940,10 +875,29 @@ class DebtViewModel(
                 preferencesRepository.saveSetupDate(today)
                 preferencesRepository.setOnboardingDone()
             }
-            val transactions = withContext(Dispatchers.IO) { repository.allTransactions.firstOrNull() ?: emptyList() }
+
+            _loadingStep.value = 2
+            val transactions = withContext(Dispatchers.IO) {
+                repository.allTransactions.firstOrNull() ?: emptyList()
+            }
             _transactions.value = transactions
-            recalculateDebtState(transactions = transactions, deadlineOverride = deadline, totalDebtOverride = totalDebt)
+            recalculateDebtState(
+                transactions = transactions,
+                deadlineOverride = deadline,
+                totalDebtOverride = totalDebt
+            )
+
+            _loadingStep.value = 3
             rebuildChatModel()
+
+            _loadingStep.value = 4
+            loadFeedbackStats()
+
+            _loadingStep.value = 5
+            cleanupOldData()
+
+            _loadingStep.value = 6
+            delay(100)
             _isDataReady.value = true
         }
     }

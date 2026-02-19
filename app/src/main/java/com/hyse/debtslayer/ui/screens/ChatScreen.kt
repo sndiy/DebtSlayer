@@ -36,6 +36,7 @@ import com.hyse.debtslayer.ui.components.ChatInputField
 import com.hyse.debtslayer.ui.components.DebtProgressCard
 import com.hyse.debtslayer.viewmodel.DebtViewModel
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -84,24 +85,15 @@ private fun isConnected(context: Context): Boolean {
 // ── No Internet Overlay ───────────────────────────────────────────────────────
 @Composable
 fun NoInternetOverlay() {
-    // Pulse animation untuk icon wifi off
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.12f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse
-        ),
+        initialValue = 1f, targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOut), RepeatMode.Reverse),
         label = "pulseScale"
     )
     val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.15f,
-        targetValue = 0.3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse
-        ),
+        initialValue = 0.15f, targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOut), RepeatMode.Reverse),
         label = "pulseAlpha"
     )
 
@@ -123,23 +115,19 @@ fun NoInternetOverlay() {
             verticalArrangement = Arrangement.spacedBy(24.dp),
             modifier = Modifier.padding(40.dp)
         ) {
-            // Icon dengan efek pulse ring
             Box(contentAlignment = Alignment.Center) {
-                // Ring luar (pulse)
                 Box(
                     modifier = Modifier
                         .size((120 * pulseScale).dp)
                         .clip(CircleShape)
                         .background(Color(0xFFEF5350).copy(alpha = pulseAlpha))
                 )
-                // Ring tengah
                 Box(
                     modifier = Modifier
                         .size(90.dp)
                         .clip(CircleShape)
                         .background(Color(0xFFEF5350).copy(alpha = 0.18f))
                 )
-                // Icon utama
                 Box(
                     modifier = Modifier
                         .size(72.dp)
@@ -156,7 +144,6 @@ fun NoInternetOverlay() {
                 }
             }
 
-            // Teks
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -177,7 +164,6 @@ fun NoInternetOverlay() {
                 )
             }
 
-            // Chip status
             Surface(
                 shape = RoundedCornerShape(50),
                 color = Color(0xFFEF5350).copy(alpha = 0.2f)
@@ -205,7 +191,7 @@ fun NoInternetOverlay() {
     }
 }
 
-// ── Reconnected Snackbar Banner ───────────────────────────────────────────────
+// ── Reconnected Banner ────────────────────────────────────────────────────────
 @Composable
 fun ReconnectedBanner(visible: Boolean) {
     AnimatedVisibility(
@@ -224,12 +210,7 @@ fun ReconnectedBanner(visible: Boolean) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    Icons.Default.Wifi,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
+                Icon(Icons.Default.Wifi, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Text(
                     "Koneksi kembali! Mai siap diajak ngobrol.",
                     style = MaterialTheme.typography.bodySmall,
@@ -249,37 +230,31 @@ fun ChatScreen(viewModel: DebtViewModel) {
     val isLoading by viewModel.isLoading.collectAsState()
     val isDarkTheme = isSystemInDarkTheme()
     val depositConfirmation by viewModel.depositConfirmation.collectAsState()
-
     val isConnected by rememberNetworkState()
 
-    // Track koneksi sebelumnya untuk deteksi reconnect
     var wasDisconnected by remember { mutableStateOf(false) }
     var showReconnectedBanner by remember { mutableStateOf(false) }
+
     val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(isConnected) {
         if (!isConnected) {
             wasDisconnected = true
-            // ✅ Cancel request yang sedang berjalan saat internet mati
             viewModel.cancelPendingMessage()
-        } else if (wasDisconnected && isConnected) {
-            // Baru reconnect — tampilkan banner sebentar
+        } else if (wasDisconnected) {
             showReconnectedBanner = true
             coroutineScope.launch {
-                kotlinx.coroutines.delay(2500)
+                delay(2500)
                 showReconnectedBanner = false
                 wasDisconnected = false
             }
         }
     }
 
-    val listState = rememberLazyListState()
-    val snackbarHostState = remember { SnackbarHostState() }
-
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
     LaunchedEffect(depositConfirmation) {
@@ -294,10 +269,7 @@ fun ChatScreen(viewModel: DebtViewModel) {
 
     Scaffold(
         snackbarHost = {
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            SnackbarHost(hostState = snackbarHostState, modifier = Modifier.padding(bottom = 8.dp))
         }
     ) { paddingValues ->
         Box(
@@ -305,9 +277,7 @@ fun ChatScreen(viewModel: DebtViewModel) {
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // ── Konten chat utama ──
             Column(modifier = Modifier.fillMaxSize()) {
-                // Banner reconnected (di atas)
                 ReconnectedBanner(visible = showReconnectedBanner)
 
                 DebtProgressCard(debtState = debtState)
@@ -358,13 +328,15 @@ fun ChatScreen(viewModel: DebtViewModel) {
                     }
                 }
 
+                // ChatInputField kini menerima isLoading dan onStop
                 ChatInputField(
                     onSend = { text -> viewModel.sendMessage(text) },
-                    enabled = !isLoading && isConnected
+                    onStop = { viewModel.cancelPendingMessage() },
+                    enabled = isConnected,
+                    isLoading = isLoading
                 )
             }
 
-            // ── Overlay no internet (di atas semua konten) ──
             AnimatedVisibility(
                 visible = !isConnected,
                 enter = fadeIn(animationSpec = tween(300)),
