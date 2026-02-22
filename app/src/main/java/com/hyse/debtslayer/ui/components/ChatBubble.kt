@@ -15,14 +15,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.hyse.debtslayer.ui.theme.ChatAiBubbleDark
-import com.hyse.debtslayer.ui.theme.ChatAiBubbleLight
-import com.hyse.debtslayer.ui.theme.ChatUserBubbleDark
-import com.hyse.debtslayer.ui.theme.ChatUserBubbleLight
 import com.hyse.debtslayer.viewmodel.ChatMessage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+// Warna bubble yang jelas berbeda antara user dan AI
+private val UserBubbleDark  = Color(0xFF4A148C) // ungu tua — user (kanan)
+private val AiBubbleDark    = Color(0xFF1A237E) // biru tua — Mai (kiri)
+private val UserBubbleLight = Color(0xFF7B1FA2) // ungu medium — user
+private val AiBubbleLight   = Color(0xFF1565C0) // biru medium — Mai
 
 @Composable
 fun ChatBubble(
@@ -32,6 +34,20 @@ fun ChatBubble(
     feedbackGiven: Boolean = message.feedbackGiven,
     feedbackIsPositive: Boolean? = message.feedbackIsPositive
 ) {
+    val bubbleColor = when {
+        message.isFromUser && isDarkTheme  -> UserBubbleDark
+        message.isFromUser && !isDarkTheme -> UserBubbleLight
+        !message.isFromUser && isDarkTheme -> AiBubbleDark
+        else                               -> AiBubbleLight
+    }
+
+    // User: sudut kanan bawah lancip, AI: sudut kiri bawah lancip
+    val bubbleShape = RoundedCornerShape(
+        topStart = 16.dp, topEnd = 16.dp,
+        bottomStart = if (message.isFromUser) 16.dp else 4.dp,
+        bottomEnd   = if (message.isFromUser) 4.dp  else 16.dp
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -41,30 +57,14 @@ fun ChatBubble(
         Box(
             modifier = Modifier
                 .widthIn(max = 280.dp)
-                .background(
-                    color = when {
-                        message.isFromUser && isDarkTheme -> ChatUserBubbleDark
-                        message.isFromUser && !isDarkTheme -> ChatUserBubbleLight
-                        !message.isFromUser && isDarkTheme -> ChatAiBubbleDark
-                        else -> ChatAiBubbleLight
-                    },
-                    shape = RoundedCornerShape(
-                        topStart = 16.dp, topEnd = 16.dp,
-                        bottomStart = if (message.isFromUser) 16.dp else 4.dp,
-                        bottomEnd = if (message.isFromUser) 4.dp else 16.dp
-                    )
-                )
+                .background(color = bubbleColor, shape = bubbleShape)
                 .padding(12.dp)
         ) {
             Column {
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
-                    // ✅ FIX: teks bubble sekarang selalu putih di dark theme
-                    // ChatUserBubbleDark (#1E3A5F) dan ChatAiBubbleDark (#6A1B9A) keduanya gelap
-                    // jadi teks putih selalu kontras. Di light theme pakai onSurface (gelap).
-                    color = if (isDarkTheme) Color.White
-                    else MaterialTheme.colorScheme.onSurface
+                    color = Color.White
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
@@ -75,59 +75,51 @@ fun ChatBubble(
                     Text(
                         text = formatTime(message.timestamp),
                         style = MaterialTheme.typography.bodySmall,
-                        // ✅ FIX: timestamp juga pakai warna yang readable
-                        color = if (isDarkTheme)
-                            Color.White.copy(alpha = 0.65f)
-                        else
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = Color.White.copy(alpha = 0.6f)
                     )
 
                     if (!message.isFromUser) {
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             when {
-                                // ✅ Sudah klik 👍 → tampil HIJAU saja, tidak bisa diklik
                                 feedbackGiven && feedbackIsPositive == true -> {
                                     AnimatedVisibility(visible = true, enter = fadeIn() + scaleIn()) {
                                         Icon(
                                             imageVector = Icons.Default.ThumbUp,
                                             contentDescription = "Disukai",
                                             modifier = Modifier.size(16.dp),
-                                            tint = Color(0xFF4CAF50)
+                                            tint = Color(0xFF69F0AE)
                                         )
                                     }
                                 }
-                                // ✅ Sudah klik 👎 → tampil MERAH saja, tidak bisa diklik
                                 feedbackGiven && feedbackIsPositive == false -> {
                                     AnimatedVisibility(visible = true, enter = fadeIn() + scaleIn()) {
                                         Icon(
                                             imageVector = Icons.Default.ThumbDown,
                                             contentDescription = "Tidak disukai",
                                             modifier = Modifier.size(16.dp),
-                                            tint = Color(0xFFF44336)
+                                            tint = Color(0xFFFF5252)
                                         )
                                     }
                                 }
-                                // ✅ Belum feedback → tampil 2 tombol aktif
                                 !feedbackGiven && onFeedback != null -> {
-                                    IconButton(onClick = { onFeedback(true) }, modifier = Modifier.size(24.dp)) {
+                                    IconButton(
+                                        onClick = { onFeedback(true) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
                                         Icon(
                                             Icons.Default.ThumbUp, "Suka",
                                             modifier = Modifier.size(16.dp),
-                                            // ✅ FIX: icon feedback juga readable di dark
-                                            tint = if (isDarkTheme)
-                                                Color.White.copy(alpha = 0.5f)
-                                            else
-                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                            tint = Color.White.copy(alpha = 0.5f)
                                         )
                                     }
-                                    IconButton(onClick = { onFeedback(false) }, modifier = Modifier.size(24.dp)) {
+                                    IconButton(
+                                        onClick = { onFeedback(false) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
                                         Icon(
                                             Icons.Default.ThumbDown, "Tidak suka",
                                             modifier = Modifier.size(16.dp),
-                                            tint = if (isDarkTheme)
-                                                Color.White.copy(alpha = 0.5f)
-                                            else
-                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                            tint = Color.White.copy(alpha = 0.5f)
                                         )
                                     }
                                 }

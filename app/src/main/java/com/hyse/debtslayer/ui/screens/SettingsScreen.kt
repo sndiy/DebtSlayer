@@ -16,7 +16,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,6 +32,67 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
+// ── Expandable Section wrapper ────────────────────────────────────────────────
+@Composable
+fun ExpandableSection(
+    icon: ImageVector,
+    title: String,
+    subtitle: String = "",
+    initiallyExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(250),
+        label = "arrow"
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(icon, title, tint = MaterialTheme.colorScheme.primary)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    if (subtitle.isNotEmpty()) {
+                        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                }
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Tutup" else "Buka",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.rotate(arrowRotation)
+                )
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(250)) + fadeIn(tween(200)),
+                exit = shrinkVertically(tween(200)) + fadeOut(tween(150))
+            ) {
+                Column {
+                    HorizontalDivider()
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        content()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Settings Screen ───────────────────────────────────────────────────────────
 @Composable
 fun SettingsScreen(viewModel: DebtViewModel) {
     val personalityMode by viewModel.personalityMode.collectAsState()
@@ -47,188 +110,205 @@ fun SettingsScreen(viewModel: DebtViewModel) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "⚙️ Pengaturan",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
+        Text("⚙️ Pengaturan", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
-        DebtInfoCard(
-            debtState = debtState,
-            customDeadline = customDeadline,
-            totalDebt = totalDebt,
-            viewModel = viewModel
-        )
-
-        ReminderTimeCard(
-            hour = reminderHour,
-            minute = reminderMinute,
-            onTimeChanged = { h, m -> viewModel.saveReminderTime(h, m) },
-            onTestNotification = { viewModel.testNotification() },
-            context = context
-        )
-
-        // ── CARD: Kepribadian Mai ─────────────────────────────────
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        // 1. Info Hutang — terbuka secara default
+        ExpandableSection(
+            icon = Icons.Default.AccountBalance,
+            title = "💰 Info Hutang",
+            subtitle = "Sisa ${CurrencyFormatter.format(debtState.remainingDebt)} • ${debtState.daysRemaining} hari lagi",
+            initiallyExpanded = true
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Default.Psychology, "AI Mode", tint = MaterialTheme.colorScheme.primary)
-                    Text(
-                        "Kepribadian Mai",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Pilih bagaimana Mai berinteraksi denganmu:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-                Spacer(Modifier.height(12.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PersonalityOption(
-                        icon = "💢", title = "Tegas (Strict)",
-                        description = "Mai lebih galak dan tegas. Cocok untuk push ekstra!",
-                        selected = personalityMode == AdaptiveMaiPersonality.PersonalityMode.STRICT,
-                        onClick = { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.STRICT) }
-                    )
-                    PersonalityOption(
-                        icon = "😊", title = "Seimbang (Balanced)",
-                        description = "Mix antara tegas dan lembut. Default mode.",
-                        selected = personalityMode == AdaptiveMaiPersonality.PersonalityMode.BALANCED,
-                        onClick = { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.BALANCED) }
-                    )
-                    PersonalityOption(
-                        icon = "💜", title = "Lembut (Gentle)",
-                        description = "Mai lebih supportive dan encouraging.",
-                        selected = personalityMode == AdaptiveMaiPersonality.PersonalityMode.GENTLE,
-                        onClick = { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.GENTLE) }
-                    )
-                }
+            DebtInfoContent(debtState = debtState, customDeadline = customDeadline, totalDebt = totalDebt, viewModel = viewModel)
+        }
+
+        // 2. Reminder
+        ExpandableSection(
+            icon = Icons.Default.Notifications,
+            title = "🔔 Waktu Reminder Harian",
+            subtitle = "Setiap hari ${reminderHour.toString().padStart(2,'0')}:${reminderMinute.toString().padStart(2,'0')}"
+        ) {
+            ReminderContent(hour = reminderHour, minute = reminderMinute, onTimeChanged = { h, m -> viewModel.saveReminderTime(h, m) }, onTestNotification = { viewModel.testNotification() }, context = context)
+        }
+
+        // 3. Kepribadian Mai
+        ExpandableSection(
+            icon = Icons.Default.Psychology,
+            title = "Kepribadian Mai",
+            subtitle = when (personalityMode) {
+                AdaptiveMaiPersonality.PersonalityMode.STRICT   -> "Mode: Tegas 💢"
+                AdaptiveMaiPersonality.PersonalityMode.BALANCED -> "Mode: Seimbang 😊"
+                AdaptiveMaiPersonality.PersonalityMode.GENTLE   -> "Mode: Lembut 💜"
+            }
+        ) {
+            Text("Pilih bagaimana Mai berinteraksi denganmu:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Spacer(Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PersonalityOption("💢", "Tegas (Strict)", "Mai lebih galak dan tegas. Cocok untuk push ekstra!", personalityMode == AdaptiveMaiPersonality.PersonalityMode.STRICT) { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.STRICT) }
+                PersonalityOption("😊", "Seimbang (Balanced)", "Mix antara tegas dan lembut. Default mode.", personalityMode == AdaptiveMaiPersonality.PersonalityMode.BALANCED) { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.BALANCED) }
+                PersonalityOption("💜", "Lembut (Gentle)", "Mai lebih supportive dan encouraging.", personalityMode == AdaptiveMaiPersonality.PersonalityMode.GENTLE) { viewModel.setPersonalityMode(AdaptiveMaiPersonality.PersonalityMode.GENTLE) }
             }
         }
 
-        // ── CARD: AI Learning Stats ───────────────────────────────
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        // 4. AI Learning Stats
+        val total = positiveFeedback + negativeFeedback
+        ExpandableSection(
+            icon = Icons.Default.AutoAwesome,
+            title = "🧠 AI Learning Stats",
+            subtitle = if (total > 0) "$positiveFeedback 👍  $negativeFeedback 👎" else "Belum ada feedback"
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Default.AutoAwesome, "AI Learning", tint = MaterialTheme.colorScheme.primary)
-                    Text(
-                        "🧠 AI Learning Stats",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Mai belajar dari feedback kamu untuk memberikan respons yang lebih baik!",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                )
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    StatBox(Icons.Default.ThumbUp, positiveFeedback, "Positif", MaterialTheme.colorScheme.primary)
-                    HorizontalDivider(modifier = Modifier.height(60.dp).width(1.dp))
-                    StatBox(Icons.Default.ThumbDown, negativeFeedback, "Negatif", MaterialTheme.colorScheme.error)
-                }
-
-                val total = positiveFeedback + negativeFeedback
-                if (total > 0) {
-                    Spacer(Modifier.height(12.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
-                    val ratio = positiveFeedback.toFloat() / total
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Kepuasan:", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "${String.format("%.1f", ratio * 100)}%",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { ratio },
-                        modifier = Modifier.fillMaxWidth().height(8.dp),
-                        color = when {
-                            ratio > 0.7f -> MaterialTheme.colorScheme.primary
-                            ratio > 0.4f -> MaterialTheme.colorScheme.tertiary
-                            else -> MaterialTheme.colorScheme.error
-                        },
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.Lightbulb, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                            Text(
-                                text = when {
-                                    ratio > 0.8f -> "Mai akan lebih lembut karena kamu suka respons supportive 😊"
-                                    ratio < 0.3f -> "Mai akan lebih tegas karena kamu butuh push lebih! 💪"
-                                    total < 5 -> "Berikan lebih banyak feedback agar Mai bisa belajar!"
-                                    else -> "Mode seimbang berdasarkan preferensimu"
-                                },
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.height(12.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                            Text(
-                                "Belum ada feedback. Gunakan 👍👎 di chat untuk membantu Mai belajar!",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
-            }
+            AiLearningContent(positiveFeedback = positiveFeedback, negativeFeedback = negativeFeedback)
         }
 
-        // ── CARD: Model AI ────────────────────────────────────────
+        // 5. Model AI (tidak expandable — info penting, ringkas)
         ModelInfoCard(viewModel = viewModel)
 
-        // ── CARD: Riwayat Percakapan ──────────────────────────────
+        // 6. Riwayat Chat
         ChatHistoryCard(viewModel = viewModel)
 
         Spacer(Modifier.height(16.dp))
     }
 }
 
-// ── Card Model Info ───────────────────────────────────────────────────────────
+// ── Konten Info Hutang ────────────────────────────────────────────────────────
+@Composable
+fun DebtInfoContent(
+    debtState: com.hyse.debtslayer.viewmodel.DebtState,
+    customDeadline: String?,
+    totalDebt: Long,
+    viewModel: DebtViewModel
+) {
+    val context = LocalContext.current
+    var showTotalDebtDialog by remember { mutableStateOf(false) }
+    val isUpdatingDebt by viewModel.isUpdatingDebt.collectAsState()
+    val initialDeadline by viewModel.initialDeadline.collectAsState(initial = null)
+    val deadlineDateFormat = SimpleDateFormat("d MMM yyyy", Locale("id", "ID"))
+    val deadlineSaveFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+
+    if (isUpdatingDebt) {
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+    }
+
+    InfoEditRow("Total Hutang", CurrencyFormatter.format(totalDebt)) { showTotalDebtDialog = true }
+    Spacer(Modifier.height(8.dp))
+    DebtInfoRow("Sisa Hutang", CurrencyFormatter.format(debtState.remainingDebt), MaterialTheme.colorScheme.error)
+    Spacer(Modifier.height(8.dp))
+    DebtInfoRow("Sudah Dibayar", CurrencyFormatter.format(debtState.totalPaid), MaterialTheme.colorScheme.primary)
+    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+    InfoEditRow(
+        label = "Deadline",
+        value = if (customDeadline != null) {
+            try { deadlineDateFormat.format(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(customDeadline)!!) }
+            catch (e: Exception) { customDeadline }
+        } else "Belum diset",
+        onEditClick = {
+            val cal = Calendar.getInstance()
+            if (customDeadline != null) {
+                try { cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(customDeadline)!! } catch (e: Exception) { }
+            }
+            DatePickerDialog(context, { _, year, month, day ->
+                viewModel.updateDeadlineFromSettings(deadlineSaveFormat.format(Calendar.getInstance().apply { set(year, month, day) }.time))
+            }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).apply {
+                datePicker.minDate = System.currentTimeMillis() + (1000L * 60 * 60 * 24)
+            }.show()
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+    DebtInfoRow("Hari Tersisa", "${debtState.daysRemaining} hari", if (debtState.daysRemaining < 30) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+    Spacer(Modifier.height(8.dp))
+    DebtInfoRow("Target/Hari (otomatis)", CurrencyFormatter.format(debtState.dailyTarget), MaterialTheme.colorScheme.secondary)
+
+    val showResetButton = customDeadline != null && initialDeadline != null && customDeadline != initialDeadline
+    if (showResetButton) {
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = { viewModel.resetDeadline() }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            val label = try { "Reset ke Deadline Awal (${SimpleDateFormat("d MMMM yyyy", Locale("id","ID")).format(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(initialDeadline!!)!!)})" } catch (e: Exception) { "Reset ke Deadline Awal" }
+            Text(label)
+        }
+    }
+
+    if (showTotalDebtDialog) {
+        EditTotalDebtDialog(currentTotal = totalDebt, onConfirm = { viewModel.updateTotalDebtFromSettings(it); showTotalDebtDialog = false }, onDismiss = { showTotalDebtDialog = false })
+    }
+}
+
+// ── Konten Reminder ───────────────────────────────────────────────────────────
+@Composable
+fun ReminderContent(hour: Int, minute: Int, onTimeChanged: (Int, Int) -> Unit, onTestNotification: () -> Unit, context: android.content.Context) {
+    var showTestConfirm by remember { mutableStateOf(false) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().clickable { TimePickerDialog(context, { _, h, m -> onTimeChanged(h, m) }, hour, minute, true).show() }
+    ) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("Jam reminder setiap hari", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${hour.toString().padStart(2,'0')}:${minute.toString().padStart(2,'0')}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+            Icon(Icons.Default.Edit, "Ubah", tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("Ketuk untuk ubah jam. Mai akan mengirim notifikasi sesuai mode kepribadian yang aktif.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+    Spacer(Modifier.height(12.dp))
+    OutlinedButton(onClick = { onTestNotification(); showTestConfirm = true }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.Send, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("Kirim Notifikasi Test Sekarang")
+    }
+    if (showTestConfirm) {
+        LaunchedEffect(Unit) { kotlinx.coroutines.delay(3000); showTestConfirm = false }
+        Spacer(Modifier.height(8.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(8.dp)) {
+            Text("✅ Notifikasi test dikirim! Cek notifikasi HP kamu.", modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+}
+
+// ── Konten AI Learning ────────────────────────────────────────────────────────
+@Composable
+fun AiLearningContent(positiveFeedback: Int, negativeFeedback: Int) {
+    Text("Mai belajar dari feedback kamu untuk memberikan respons yang lebih baik!", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+    Spacer(Modifier.height(16.dp))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        StatBox(Icons.Default.ThumbUp, positiveFeedback, "Positif", MaterialTheme.colorScheme.primary)
+        HorizontalDivider(modifier = Modifier.height(60.dp).width(1.dp))
+        StatBox(Icons.Default.ThumbDown, negativeFeedback, "Negatif", MaterialTheme.colorScheme.error)
+    }
+    val total = positiveFeedback + negativeFeedback
+    if (total > 0) {
+        val ratio = positiveFeedback.toFloat() / total
+        Spacer(Modifier.height(12.dp)); HorizontalDivider(); Spacer(Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Kepuasan:", style = MaterialTheme.typography.bodyMedium)
+            Text("${String.format("%.1f", ratio * 100)}%", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(progress = { ratio }, modifier = Modifier.fillMaxWidth().height(8.dp), color = when { ratio > 0.7f -> MaterialTheme.colorScheme.primary; ratio > 0.4f -> MaterialTheme.colorScheme.tertiary; else -> MaterialTheme.colorScheme.error }, trackColor = MaterialTheme.colorScheme.surfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Lightbulb, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text(when { ratio > 0.8f -> "Mai akan lebih lembut karena kamu suka respons supportive 😊"; ratio < 0.3f -> "Mai akan lebih tegas karena kamu butuh push lebih! 💪"; total < 5 -> "Berikan lebih banyak feedback agar Mai bisa belajar!"; else -> "Mode seimbang berdasarkan preferensimu" }, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    } else {
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text("Belum ada feedback. Gunakan 👍👎 di chat untuk membantu Mai belajar!", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+// ── Card Model AI ─────────────────────────────────────────────────────────────
 @Composable
 fun ModelInfoCard(viewModel: DebtViewModel) {
     val activeModel by viewModel.activeModel.collectAsState()
@@ -239,96 +319,31 @@ fun ModelInfoCard(viewModel: DebtViewModel) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isUsingFallback)
-                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
-            else
-                MaterialTheme.colorScheme.surfaceVariant
-        )
+        colors = CardDefaults.cardColors(containerColor = if (isUsingFallback) MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.SmartToy, "Model AI", tint = MaterialTheme.colorScheme.primary)
-                Text(
-                    "🤖 Model AI",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("🤖 Model AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
-
-            // Badge model aktif
             Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isUsingFallback)
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
-                    else
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                ),
+                colors = CardDefaults.cardColors(containerColor = if (isUsingFallback) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Dot animasi pulse
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                    val alpha by infiniteTransition.animateFloat(
-                        initialValue = 0.4f, targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(900),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "dot_alpha"
-                    )
-                    Surface(
-                        modifier = Modifier.size(10.dp),
-                        shape = androidx.compose.foundation.shape.CircleShape,
-                        color = (if (isUsingFallback) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.primary).copy(alpha = alpha)
-                    ) {}
-
+                    val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 1f, animationSpec = infiniteRepeatable(animation = tween(900), repeatMode = RepeatMode.Reverse), label = "dot_alpha")
+                    Surface(modifier = Modifier.size(10.dp), shape = androidx.compose.foundation.shape.CircleShape, color = (if (isUsingFallback) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary).copy(alpha = alpha)) {}
                     Column {
-                        Text(
-                            "Sedang Digunakan",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                        Text(
-                            activeModelName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary
-                            else MaterialTheme.colorScheme.primary
-                        )
+                        Text("Sedang Digunakan", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(activeModelName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
                     }
-
                     Spacer(Modifier.weight(1f))
-
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (isUsingFallback)
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f)
-                        else
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            if (isUsingFallback) "Cadangan" else "Utama",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary
-                            else MaterialTheme.colorScheme.primary
-                        )
+                    Surface(shape = RoundedCornerShape(4.dp), color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)) {
+                        Text(if (isUsingFallback) "Cadangan" else "Utama", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (isUsingFallback) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
                     }
                 }
             }
-
             HorizontalDivider()
             ModelInfoRow("Limit Aktif", "${activeLimits.rpm} RPM  •  ${activeLimits.rpd} RPD")
             HorizontalDivider()
@@ -340,22 +355,9 @@ fun ModelInfoCard(viewModel: DebtViewModel) {
 
 @Composable
 private fun ModelInfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -365,297 +367,74 @@ fun ChatHistoryCard(viewModel: DebtViewModel) {
     val conversationCount = remember { mutableStateOf(0) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showDeletedConfirm by remember { mutableStateOf(false) }
-
-    // Refresh count setiap kali card ini ditampilkan atau setelah hapus
     val refreshTrigger = remember { mutableStateOf(0) }
-    LaunchedEffect(refreshTrigger.value) {
-        viewModel.getConversationCount { count -> conversationCount.value = count }
-    }
+    LaunchedEffect(refreshTrigger.value) { viewModel.getConversationCount { conversationCount.value = it } }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.MenuBook, "Riwayat", tint = MaterialTheme.colorScheme.primary)
-                Text(
-                    "📚 Riwayat Percakapan",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("📚 Riwayat Percakapan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Pesan otomatis dihapus setelah 7 hari. Kamu juga bisa menghapus manual kapan saja.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-            )
+            Text("Pesan otomatis dihapus setelah 7 hari. Kamu juga bisa menghapus manual kapan saja.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Total Percakapan Tersimpan:", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "${conversationCount.value} percakapan",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("${conversationCount.value} percakapan", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(12.dp))
-
-            // Tombol hapus — hanya aktif kalau ada percakapan
             OutlinedButton(
                 onClick = { showDeleteDialog = true },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = conversationCount.value > 0,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                ),
-                border = ButtonDefaults.outlinedButtonBorder.copy(
-                    brush = androidx.compose.ui.graphics.SolidColor(
-                        if (conversationCount.value > 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                    )
-                )
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(if (conversationCount.value > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
             ) {
-                Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Hapus Semua Riwayat Chat")
+                Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Hapus Semua Riwayat Chat")
             }
-
-            // Konfirmasi berhasil hapus
             AnimatedVisibility(visible = showDeletedConfirm) {
-                LaunchedEffect(showDeletedConfirm) {
-                    if (showDeletedConfirm) {
-                        kotlinx.coroutines.delay(3000)
-                        showDeletedConfirm = false
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            "✅ Semua riwayat chat berhasil dihapus.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                LaunchedEffect(showDeletedConfirm) { if (showDeletedConfirm) { kotlinx.coroutines.delay(3000); showDeletedConfirm = false } }
+                Column {
+                    Spacer(Modifier.height(8.dp))
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(8.dp)) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            Text("✅ Semua riwayat chat berhasil dihapus.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
                     }
                 }
             }
         }
     }
 
-    // Dialog konfirmasi hapus
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            icon = {
-                Icon(
-                    Icons.Default.DeleteForever,
-                    null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text("Hapus Riwayat Chat?", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Text(
-                    "Semua ${conversationCount.value} percakapan akan dihapus permanen. " +
-                            "Tindakan ini tidak bisa dibatalkan.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            },
+            icon = { Icon(Icons.Default.DeleteForever, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(32.dp)) },
+            title = { Text("Hapus Riwayat Chat?", fontWeight = FontWeight.Bold) },
+            text = { Text("Semua ${conversationCount.value} percakapan akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.") },
             confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.clearChatHistory()
-                        showDeleteDialog = false
-                        showDeletedConfirm = true
-                        refreshTrigger.value++
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("Hapus Semua")
-                }
+                Button(onClick = { viewModel.clearChatHistory(); showDeleteDialog = false; showDeletedConfirm = true; refreshTrigger.value++ }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Hapus Semua") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Batal")
-                }
-            }
+            dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("Batal") } }
         )
     }
 }
 
-
-// ── Card Info & Edit Hutang ───────────────────────────────────────────────────
-@Composable
-fun DebtInfoCard(
-    debtState: com.hyse.debtslayer.viewmodel.DebtState,
-    customDeadline: String?,
-    totalDebt: Long,
-    viewModel: DebtViewModel
-) {
-    val context = LocalContext.current
-    var showTotalDebtDialog by remember { mutableStateOf(false) }
-    val isUpdatingDebt by viewModel.isUpdatingDebt.collectAsState()
-    val initialDeadline by viewModel.initialDeadline.collectAsState(initial = null)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.AccountBalance, "Hutang", tint = MaterialTheme.colorScheme.secondary)
-                Text(
-                    "💰 Info Hutang",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                if (isUpdatingDebt) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            InfoEditRow(
-                label = "Total Hutang",
-                value = CurrencyFormatter.format(totalDebt),
-                onEditClick = { showTotalDebtDialog = true }
-            )
-            Spacer(Modifier.height(8.dp))
-
-            DebtInfoRow("Sisa Hutang", CurrencyFormatter.format(debtState.remainingDebt), MaterialTheme.colorScheme.error)
-            Spacer(Modifier.height(8.dp))
-            DebtInfoRow("Sudah Dibayar", CurrencyFormatter.format(debtState.totalPaid), MaterialTheme.colorScheme.primary)
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-
-            val deadlineDateFormat = SimpleDateFormat("d MMM yyyy", Locale("id", "ID"))
-            val deadlineSaveFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-
-            InfoEditRow(
-                label = "Deadline",
-                value = if (customDeadline != null) {
-                    try {
-                        deadlineDateFormat.format(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(customDeadline)!!)
-                    } catch (e: Exception) { customDeadline }
-                } else "Belum diset",
-                onEditClick = {
-                    val cal = Calendar.getInstance()
-                    if (customDeadline != null) {
-                        try { cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(customDeadline)!! }
-                        catch (e: Exception) { }
-                    }
-                    DatePickerDialog(
-                        context,
-                        { _, year, month, day ->
-                            viewModel.updateDeadlineFromSettings(
-                                deadlineSaveFormat.format(Calendar.getInstance().apply { set(year, month, day) }.time)
-                            )
-                        },
-                        cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)
-                    ).apply {
-                        datePicker.minDate = System.currentTimeMillis() + (1000L * 60 * 60 * 24)
-                    }.show()
-                }
-            )
-            Spacer(Modifier.height(8.dp))
-
-            DebtInfoRow(
-                "Hari Tersisa",
-                "${debtState.daysRemaining} hari",
-                if (debtState.daysRemaining < 30) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSecondaryContainer
-            )
-            Spacer(Modifier.height(8.dp))
-            DebtInfoRow("Target/Hari (otomatis)", CurrencyFormatter.format(debtState.dailyTarget), MaterialTheme.colorScheme.secondary)
-
-            val showResetButton = customDeadline != null && initialDeadline != null && customDeadline != initialDeadline
-            if (showResetButton) {
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { viewModel.resetDeadline() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    val resetLabel = try {
-                        val disp = SimpleDateFormat("d MMMM yyyy", Locale("id", "ID"))
-                        "Reset ke Deadline Awal (${disp.format(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(initialDeadline!!)!!)})"
-                    } catch (e: Exception) { "Reset ke Deadline Awal" }
-                    Text(resetLabel)
-                }
-            }
-        }
-    }
-
-    if (showTotalDebtDialog) {
-        EditTotalDebtDialog(
-            currentTotal = totalDebt,
-            onConfirm = { newTotal ->
-                viewModel.updateTotalDebtFromSettings(newTotal)
-                showTotalDebtDialog = false
-            },
-            onDismiss = { showTotalDebtDialog = false }
-        )
-    }
-}
-
+// ── Helpers ───────────────────────────────────────────────────────────────────
 @Composable
 private fun DebtInfoRow(label: String, value: String, valueColor: Color) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = valueColor)
     }
 }
 
 @Composable
 fun InfoEditRow(label: String, value: String, onEditClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(8.dp))
@@ -671,17 +450,12 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
     var inputText by remember { mutableStateOf(currentTotal.toString()) }
     var errorMsg by remember { mutableStateOf("") }
     val formatter = NumberFormat.getNumberInstance(Locale("id", "ID"))
-
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("💰 Ubah Total Hutang", fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                Text(
-                    "Masukkan nominal total hutang dalam Rupiah.\nContoh: 12445000",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
+                Text("Masukkan nominal total hutang dalam Rupiah.\nContoh: 12445000", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = inputText,
@@ -690,14 +464,9 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
                     placeholder = { Text("12445000") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = errorMsg.isNotEmpty(),
-                    supportingText = if (errorMsg.isNotEmpty()) {
-                        { Text(errorMsg, color = MaterialTheme.colorScheme.error) }
-                    } else if (inputText.isNotEmpty()) {
-                        {
-                            val preview = inputText.toLongOrNull()
-                            if (preview != null) Text("= Rp ${formatter.format(preview)}", color = MaterialTheme.colorScheme.primary)
-                        }
-                    } else null,
+                    supportingText = if (errorMsg.isNotEmpty()) { { Text(errorMsg, color = MaterialTheme.colorScheme.error) } }
+                    else if (inputText.isNotEmpty()) { { val p = inputText.toLongOrNull(); if (p != null) Text("= Rp ${formatter.format(p)}", color = MaterialTheme.colorScheme.primary) } }
+                    else null,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -705,11 +474,7 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
         confirmButton = {
             Button(onClick = {
                 val amount = inputText.toLongOrNull()
-                when {
-                    amount == null -> errorMsg = "Masukkan angka yang valid"
-                    amount < 10_000 -> errorMsg = "Minimal Rp 10.000"
-                    else -> onConfirm(amount)
-                }
+                when { amount == null -> errorMsg = "Masukkan angka yang valid"; amount < 10_000 -> errorMsg = "Minimal Rp 10.000"; else -> onConfirm(amount) }
             }) { Text("Simpan") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } }
@@ -718,12 +483,7 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
 
 @Composable
 fun PersonalityOption(icon: String, title: String, description: String, selected: Boolean, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
-    ) {
+    Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = selected, onClick = onClick)
             Spacer(Modifier.width(8.dp))
@@ -738,77 +498,11 @@ fun PersonalityOption(icon: String, title: String, description: String, selected
 }
 
 @Composable
-fun StatBox(icon: androidx.compose.ui.graphics.vector.ImageVector, count: Int, label: String, color: Color) {
+fun StatBox(icon: ImageVector, count: Int, label: String, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(icon, label, tint = color, modifier = Modifier.size(32.dp))
         Spacer(Modifier.height(8.dp))
         Text(count.toString(), style = MaterialTheme.typography.headlineMedium, color = color, fontWeight = FontWeight.Bold)
         Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-    }
-}
-
-@Composable
-fun ReminderTimeCard(hour: Int, minute: Int, onTimeChanged: (Int, Int) -> Unit, onTestNotification: () -> Unit, context: android.content.Context) {
-    var showTestConfirm by remember { mutableStateOf(false) }
-
-    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(Icons.Default.Notifications, "Reminder", tint = MaterialTheme.colorScheme.primary)
-                Text("🔔 Waktu Reminder Harian", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            }
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().clickable {
-                    TimePickerDialog(context, { _, h, m -> onTimeChanged(h, m) }, hour, minute, true).show()
-                }
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Jam reminder setiap hari", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Icon(Icons.Default.Edit, "Ubah waktu", tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-
-            Text(
-                "Ketuk untuk ubah jam. Mai akan mengirim notifikasi sesuai mode kepribadian yang aktif.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-
-            OutlinedButton(onClick = { onTestNotification(); showTestConfirm = true }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Send, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Kirim Notifikasi Test Sekarang")
-            }
-
-            if (showTestConfirm) {
-                LaunchedEffect(Unit) {
-                    kotlinx.coroutines.delay(3000)
-                    showTestConfirm = false
-                }
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(8.dp)) {
-                    Text(
-                        "✅ Notifikasi test dikirim! Cek notifikasi HP kamu.",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
     }
 }

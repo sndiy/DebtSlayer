@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -29,10 +31,13 @@ class DailyReminderReceiver : BroadcastReceiver() {
         const val CHANNEL_ID = "debt_slayer_reminder"
         const val NOTIFICATION_ID = 1001
         private const val TAG = "DailyReminder"
+
+        // ✅ URI custom sound dari res/raw/custom_notification.wav
+        fun getCustomSoundUri(context: Context): Uri =
+            Uri.parse("android.resource://${context.packageName}/${R.raw.custom_notification}")
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // ✅ FIX: goAsync() mencegah BroadcastReceiver di-kill sebelum coroutine selesai
         val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -91,7 +96,6 @@ class DailyReminderReceiver : BroadcastReceiver() {
                     return@launch
                 }
 
-                // ✅ FIX: pakai CurrencyFormatter.ceilToThousand, hapus duplikat
                 val dailyTarget = CurrencyFormatter.ceilToThousand((remaining + daysLeft - 1) / daysLeft)
 
                 val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
@@ -132,7 +136,6 @@ class DailyReminderReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error: ${e.message}")
             } finally {
-                // ✅ FIX: wajib dipanggil agar sistem tahu BroadcastReceiver selesai
                 pendingResult.finish()
             }
         }
@@ -200,14 +203,28 @@ class DailyReminderReceiver : BroadcastReceiver() {
 
     private fun showNotification(context: Context, title: String, body: String) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val soundUri = getCustomSoundUri(context)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // ✅ Jika channel sudah ada tapi soundnya berbeda, hapus & buat ulang
+            val existingChannel = manager.getNotificationChannel(CHANNEL_ID)
+            if (existingChannel != null && existingChannel.sound != soundUri) {
+                manager.deleteNotificationChannel(CHANNEL_ID)
+            }
+
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Reminder Hutang",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Notifikasi harian dari Mai untuk mengingatkan target setoran"
+                setSound(soundUri, audioAttributes) // ✅ Custom sound di channel
+                enableVibration(true)
             }
             manager.createNotificationChannel(channel)
         }
@@ -226,6 +243,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSound(soundUri) // ✅ Fallback untuk Android < 8.0
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
