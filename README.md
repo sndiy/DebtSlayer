@@ -2,6 +2,8 @@
 
 Aplikasi Android untuk melacak cicilan hutang harian dengan AI chatbot karakter **Sakurajima Mai** dari anime *Seishun Buta Yarou wa Bunny Girl Senpai*.
 
+⚡ **Powered by Gemini & Claude**, me 1% ^J^
+
 ---
 
 ## ✨ Fitur Utama
@@ -66,7 +68,7 @@ Buka project di Android Studio, sync Gradle, lalu jalankan di emulator atau devi
 
 ### Setup Pertama
 Saat pertama kali buka app, isi:
-- **Total hutang** yang ingin dilunasi (contoh: Rp 12.445.000)
+- **Total hutang** yang ingin dilunasi (contoh: Rp 100.000.000)
 - **Deadline pelunasan** — tanggal target hutang lunas
 
 Mai akan menghitung target setoran harian secara otomatis.
@@ -112,18 +114,6 @@ app/src/main/java/com/hyse/debtslayer/
 - API Key disimpan di `local.properties` — tidak pernah masuk ke repository
 - Database Room terenkripsi oleh Android secara default
 - Tidak ada data pengguna yang dikirim ke server selain request ke Gemini API
-
----
-
-## 📊 Limit API (Gemini 2.5 Flash Lite — Free Tier)
-
-| Limit | Nilai |
-|---|---|
-| Request per menit (RPM) | 10 |
-| Request per hari (RPD) | 20 |
-| Token per menit (TPM) | 250.000 |
-
-Status penggunaan bisa dipantau di tab **Settings** dalam app.
 
 ---
 
