@@ -28,7 +28,7 @@ import java.util.*
 class DailyReminderReceiver : BroadcastReceiver() {
 
     companion object {
-        const val CHANNEL_ID = "debt_slayer_reminder"
+        const val CHANNEL_ID = "debt_slayer_reminder_v2"
         const val NOTIFICATION_ID = 1001
         private const val TAG = "DailyReminder"
 
