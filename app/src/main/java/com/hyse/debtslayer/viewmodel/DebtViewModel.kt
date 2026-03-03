@@ -997,6 +997,48 @@ AI normal kembali besok jam 07:00 WIB.
         }
     }
 
+    /**
+     * Dipanggil setelah login berhasil dan data cloud ditemukan.
+     * Berbeda dengan completeOnboarding() yang menjalankan full loading sequence,
+     * fungsi ini hanya apply data ke lokal & tandai onboarding selesai —
+     * tanpa reset chat atau trigger loading screen onboarding.
+     */
+    fun applyCloudDataAndCompleteOnboarding(totalDebt: Long, deadline: String) {
+        viewModelScope.launch {
+            try {
+                // Apply data ke state
+                _totalDebt.value      = totalDebt
+                _customDeadline.value = deadline
+
+                // Simpan ke DataStore lokal
+                withContext(Dispatchers.IO) {
+                    preferencesRepository.saveCustomTotalDebt(totalDebt)
+                    preferencesRepository.saveCustomDeadline(deadline)
+                    preferencesRepository.saveInitialDeadline(deadline)
+                    preferencesRepository.setOnboardingDone()   // ← kunci: tandai setup selesai
+                }
+
+                // Recalculate state hutang dengan data yang baru
+                val transactions = withContext(Dispatchers.IO) {
+                    repository.allTransactions.firstOrNull() ?: emptyList()
+                }
+                _transactions.value = transactions
+                recalculateDebtState(
+                    transactions      = transactions,
+                    deadlineOverride  = deadline,
+                    totalDebtOverride = totalDebt
+                )
+
+                // Rebuild AI model dengan context hutang terbaru
+                rebuildChatModel()
+
+                Log.d(TAG, "Cloud data applied: debt=$totalDebt, deadline=$deadline")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error applying cloud data: ${e.message}", e)
+            }
+        }
+    }
+
     fun saveReminderTime(hour: Int, minute: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             preferencesRepository.saveReminderTime(hour, minute)

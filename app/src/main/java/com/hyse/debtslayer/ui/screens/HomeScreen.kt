@@ -22,13 +22,16 @@ import kotlinx.coroutines.flow.first
 enum class AppScreen { MAIN, STATISTICS, LOGIN }
 
 // ── Init screen states ────────────────────────────────────────────────────────
-// CHECKING   : Menunggu DataStore emit nilai isOnboardingDone (bisa null sebentar)
-// AUTH       : Baru install → perlu login/guest
-// ONBOARDING : Setelah auth (akun baru / guest) → isi hutang & deadline
-// FIRST_LOADING : Loading setelah onboarding selesai disimpan
-// READY      : isOnboardingDone == true, app langsung buka (user lama)
-// LOADING    : Loading normal saat buka app setelah READY ditentukan
-private enum class InitScreen { CHECKING, AUTH, ONBOARDING, FIRST_LOADING, READY, LOADING }
+// CHECKING        : Menunggu DataStore lokal emit isOnboardingDone
+// AUTH            : Baru install → tampilkan login / guest
+// CHECKING_CLOUD  : Login berhasil → sedang cek data di Firestore
+// ONBOARDING      : Akun baru / guest / tidak ada data cloud → isi hutang & deadline
+// FIRST_LOADING   : Loading setelah onboarding pertama selesai
+// LOADING         : Loading normal tiap buka app (sudah pernah setup)
+// READY           : App siap setelah first loading
+private enum class InitScreen {
+    CHECKING, AUTH, CHECKING_CLOUD, ONBOARDING, FIRST_LOADING, LOADING, READY
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,25 +42,19 @@ fun HomeScreen(
     onRequestNotifPermission: () -> Unit = {},
     onDismissNotifBanner: () -> Unit = {}
 ) {
-    // ── isOnboardingDone dari DataStore ───────────────────────────────────────
-    // Nilai awal `null` artinya DataStore belum selesai baca → tetap CHECKING
-    // `true`  → user sudah pernah setup → skip login, langsung LOADING
-    // `false` → baru install / data terhapus → perlu AUTH
     val isOnboardingDone by viewModel.isOnboardingDone.collectAsState(initial = null)
 
     val context = LocalContext.current
 
     val authRepository = remember { AuthRepository() }
-    val authViewModel = remember { AuthViewModel(authRepository) }
-    val currentUser by authViewModel.currentUser.collectAsState()
-    val isNewAccount by authViewModel.isNewAccount.collectAsState()
-    val syncPrefs = remember { SyncPreferences(context) }
+    val authViewModel  = remember { AuthViewModel(authRepository) }
+    val currentUser    by authViewModel.currentUser.collectAsState()
+    val syncPrefs      = remember { SyncPreferences(context) }
 
-    // initScreen diinisialisasi CHECKING — hanya berubah 1x saat isOnboardingDone sudah punya nilai
-    var initScreen by remember { mutableStateOf(InitScreen.CHECKING) }
-    var appReady by remember { mutableStateOf(false) }
+    var initScreen  by remember { mutableStateOf(InitScreen.CHECKING) }
+    var appReady    by remember { mutableStateOf(false) }
     var currentScreen by remember { mutableStateOf(AppScreen.MAIN) }
-    var selectedItem by remember { mutableStateOf(0) }
+    var selectedItem  by remember { mutableStateOf(0) }
 
     // ── Back handler ──────────────────────────────────────────────────────────
     BackHandler(enabled = currentScreen != AppScreen.MAIN) {
@@ -65,120 +62,142 @@ fun HomeScreen(
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // STEP 1: Tentukan tampilan awal SEKALI saat DataStore sudah siap
-    //
-    // KEY FIX: hanya jalankan sekali (initScreen == CHECKING) agar tidak
-    // ter-reset ulang di setiap recomposition / perubahan isOnboardingDone.
+    // STEP 1: Routing awal — dijalankan SEKALI saat DataStore lokal siap
     // ══════════════════════════════════════════════════════════════════════════
     LaunchedEffect(isOnboardingDone) {
-        // Tunggu sampai DataStore benar-benar punya nilai (bukan null)
-        if (isOnboardingDone == null) return@LaunchedEffect
-        // Hanya proses 1x — jika initScreen sudah berubah dari CHECKING, abaikan
-        if (initScreen != InitScreen.CHECKING) return@LaunchedEffect
+        if (isOnboardingDone == null) return@LaunchedEffect        // DataStore belum siap
+        if (initScreen != InitScreen.CHECKING) return@LaunchedEffect // sudah diproses
 
-        if (isOnboardingDone == true) {
-            // ✅ User sudah pernah setup → langsung loading normal, SKIP login
-            initScreen = InitScreen.LOADING
+        initScreen = if (isOnboardingDone == true) {
+            // ✅ Sudah pernah setup di perangkat ini → langsung loading
+            InitScreen.LOADING
         } else {
-            // 🆕 Baru install / onboarding belum selesai → AUTH dulu
-            initScreen = InitScreen.AUTH
+            // Baru install / data terhapus → perlu AUTH
+            InitScreen.AUTH
         }
     }
 
-    // ── STEP 2: Auto-download + reschedule saat login ─────────────────────────
-    LaunchedEffect(currentUser) {
-        if (currentUser != null) {
+    // ══════════════════════════════════════════════════════════════════════════
+    // STEP 2: Setelah login berhasil → cek cloud (CHECKING_CLOUD state)
+    //
+    // Saat initScreen == CHECKING_CLOUD dan currentUser sudah ada,
+    // download data cloud. Kalau ada totalDebt & deadline → apply ke lokal
+    // dan set onboardingDone = true → langsung LOADING.
+    // Kalau tidak ada data cloud → ONBOARDING.
+    // ══════════════════════════════════════════════════════════════════════════
+    LaunchedEffect(initScreen, currentUser) {
+        if (initScreen != InitScreen.CHECKING_CLOUD) return@LaunchedEffect
+        if (currentUser == null) return@LaunchedEffect
+
+        try {
             val freq = syncPrefs.syncFrequency.first()
             AutoSyncWorker.schedule(context, freq)
 
-            try {
-                val syncRepo = CloudSyncRepository(
-                    authRepository = authRepository,
-                    transactionRepository = viewModel.getTransactionRepository()
-                )
-                if (syncRepo.hasCloudData()) {
-                    val result = syncRepo.downloadAll()
+            val syncRepo = CloudSyncRepository(
+                authRepository = authRepository,
+                transactionRepository = viewModel.getTransactionRepository()
+            )
 
-                    if (result.totalDebt != null && result.totalDebt > 0) {
-                        viewModel.updateTotalDebtFromSettings(result.totalDebt)
-                    }
-                    if (!result.deadline.isNullOrBlank()) {
-                        viewModel.updateDeadlineFromSettings(result.deadline)
-                    }
+            val hasCloud = syncRepo.hasCloudData()
+
+            if (hasCloud) {
+                // Ada data di cloud → download dulu lalu apply
+                val result = syncRepo.downloadAll()
+
+                val cloudDebt     = result.totalDebt
+                val cloudDeadline = result.deadline
+
+                if (cloudDebt != null && cloudDebt > 0 && !cloudDeadline.isNullOrBlank()) {
+                    // Apply ke ViewModel & tandai onboarding selesai di lokal
+                    viewModel.applyCloudDataAndCompleteOnboarding(cloudDebt, cloudDeadline)
+                    // Langsung LOADING — tidak perlu onboarding lagi
+                    initScreen = InitScreen.LOADING
+                } else {
+                    // Ada dokumen user di cloud tapi tidak ada debt/deadline → onboarding
+                    initScreen = InitScreen.ONBOARDING
                 }
-            } catch (e: Exception) { /* gagal → user bisa manual */ }
-        } else {
-            AutoSyncWorker.cancel(context)
+            } else {
+                // Tidak ada data cloud sama sekali → onboarding
+                initScreen = InitScreen.ONBOARDING
+            }
+        } catch (e: Exception) {
+            // Gagal cek cloud (offline, dll) → fallback ke onboarding
+            initScreen = InitScreen.ONBOARDING
         }
     }
 
+    // ── Auto-schedule sync saat user sudah login & app sudah jalan normal ────
+    LaunchedEffect(currentUser, appReady) {
+        if (currentUser == null || !appReady) return@LaunchedEffect
+        try {
+            val freq = syncPrefs.syncFrequency.first()
+            AutoSyncWorker.schedule(context, freq)
+        } catch (e: Exception) { /* abaikan */ }
+    }
+
+    // ── Cancel sync saat logout ───────────────────────────────────────────────
+    LaunchedEffect(currentUser) {
+        if (currentUser == null) AutoSyncWorker.cancel(context)
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
-    // RENDER — urutan if/return penting, jangan diubah
+    // RENDER
     // ══════════════════════════════════════════════════════════════════════════
 
-    // ── CHECKING: DataStore belum emit, tampilkan loading kosong ─────────────
+    // ── CHECKING: DataStore lokal belum siap ─────────────────────────────────
     if (isOnboardingDone == null || initScreen == InitScreen.CHECKING) {
-        // Tampilkan loading ringan sementara DataStore siap
-        // Tidak perlu panggil onReady karena nanti LaunchedEffect di atas akan
-        // mengubah initScreen begitu isOnboardingDone sudah punya nilai
         LoadingScreen(viewModel = viewModel, isFirstSetup = false, onReady = {})
         return
     }
 
-    // ── AUTH: Baru install atau onboarding belum selesai ─────────────────────
+    // ── AUTH: Baru install / data terhapus ───────────────────────────────────
     if (initScreen == InitScreen.AUTH) {
         LoginScreen(
             authViewModel = authViewModel,
             onLoginSuccess = {
-                if (isNewAccount) {
-                    // Akun baru → onboarding dulu
-                    initScreen = InitScreen.ONBOARDING
-                } else {
-                    // Login akun lama → data didownload di LaunchedEffect currentUser
-                    // Cek apakah cloud data sudah punya onboarding data:
-                    // Jika isOnboardingDone sudah true (dari cloud download) → LOADING
-                    // Jika belum → ONBOARDING
-                    if (isOnboardingDone == true) {
-                        initScreen = InitScreen.LOADING
-                    } else {
-                        initScreen = InitScreen.ONBOARDING
-                    }
-                }
+                // Login berhasil → cek data di cloud dulu sebelum putuskan
+                // apakah perlu onboarding atau langsung masuk app
+                initScreen = InitScreen.CHECKING_CLOUD
             },
             onBack = { /* tidak bisa back di layar awal */ },
             onContinueAsGuest = {
-                // Guest → onboarding dulu
+                // Guest tidak punya cloud data → langsung onboarding
                 initScreen = InitScreen.ONBOARDING
             }
         )
         return
     }
 
-    // ── ONBOARDING: User mengisi total hutang & deadline ─────────────────────
+    // ── CHECKING_CLOUD: Sedang download & cek data Firestore ─────────────────
+    if (initScreen == InitScreen.CHECKING_CLOUD) {
+        // Tampilkan loading dengan pesan yang sesuai
+        LoadingScreen(viewModel = viewModel, isFirstSetup = false, onReady = {})
+        return
+    }
+
+    // ── ONBOARDING: Hanya untuk akun baru / guest / tidak ada data cloud ─────
     if (initScreen == InitScreen.ONBOARDING) {
         OnboardingScreen(
             viewModel = viewModel,
-            onFinished = {
-                initScreen = InitScreen.FIRST_LOADING
-            }
+            onFinished = { initScreen = InitScreen.FIRST_LOADING }
         )
         return
     }
 
-    // ── FIRST LOADING: Loading setelah onboarding pertama kali ───────────────
+    // ── FIRST LOADING: Setelah onboarding pertama ────────────────────────────
     if (initScreen == InitScreen.FIRST_LOADING) {
         LoadingScreen(
             viewModel = viewModel,
             isFirstSetup = true,
             onReady = {
                 initScreen = InitScreen.READY
-                appReady = true
+                appReady   = true
             }
         )
         return
     }
 
-    // ── LOADING: Loading normal tiap buka app (user lama) ────────────────────
+    // ── LOADING: Loading normal buka app (user lama) ─────────────────────────
     if (initScreen == InitScreen.LOADING && !appReady) {
         LoadingScreen(
             viewModel = viewModel,
@@ -186,13 +205,6 @@ fun HomeScreen(
             onReady = { appReady = true }
         )
         return
-    }
-
-    // ── READY: Setelah first loading selesai, pastikan appReady ──────────────
-    if (initScreen == InitScreen.READY && !appReady) {
-        // Seharusnya tidak sampai sini karena appReady di-set di FIRST_LOADING onReady
-        // Tapi sebagai safety net:
-        appReady = true
     }
 
     // ── STATISTICS ────────────────────────────────────────────────────────────
@@ -204,7 +216,7 @@ fun HomeScreen(
         return
     }
 
-    // ── LOGIN / ACCOUNT (dari tombol akun TopAppBar) ──────────────────────────
+    // ── LOGIN / ACCOUNT (tombol akun di TopAppBar, bukan alur install) ────────
     if (currentScreen == AppScreen.LOGIN) {
         if (currentUser != null) {
             AccountScreen(
@@ -218,7 +230,7 @@ fun HomeScreen(
                 authViewModel = authViewModel,
                 onLoginSuccess = { currentScreen = AppScreen.MAIN },
                 onBack = { currentScreen = AppScreen.MAIN },
-                onContinueAsGuest = null  // tidak ada opsi guest dari sini
+                onContinueAsGuest = null
             )
         }
         return
@@ -251,9 +263,7 @@ fun HomeScreen(
                     }
                     IconButton(onClick = { currentScreen = AppScreen.LOGIN }) {
                         if (currentUser != null) {
-                            BadgedBox(
-                                badge = { Badge(containerColor = SuccessGreen) }
-                            ) {
+                            BadgedBox(badge = { Badge(containerColor = SuccessGreen) }) {
                                 Icon(
                                     Icons.Default.AccountCircle,
                                     contentDescription = "Akun",
@@ -270,8 +280,8 @@ fun HomeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    containerColor      = MaterialTheme.colorScheme.primary,
+                    titleContentColor   = MaterialTheme.colorScheme.onPrimary,
                     actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
@@ -279,28 +289,28 @@ fun HomeScreen(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Chat, contentDescription = "Chat") },
-                    label = { Text("Chat") },
+                    icon     = { Icon(Icons.Default.Chat, "Chat") },
+                    label    = { Text("Chat") },
                     selected = selectedItem == 0,
-                    onClick = { selectedItem = 0 }
+                    onClick  = { selectedItem = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.CalendarMonth, contentDescription = "Kalender") },
-                    label = { Text("Kalender") },
+                    icon     = { Icon(Icons.Default.CalendarMonth, "Kalender") },
+                    label    = { Text("Kalender") },
                     selected = selectedItem == 1,
-                    onClick = { selectedItem = 1 }
+                    onClick  = { selectedItem = 1 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.History, contentDescription = "Riwayat") },
-                    label = { Text("Riwayat") },
+                    icon     = { Icon(Icons.Default.History, "Riwayat") },
+                    label    = { Text("Riwayat") },
                     selected = selectedItem == 2,
-                    onClick = { selectedItem = 2 }
+                    onClick  = { selectedItem = 2 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                    label = { Text("Settings") },
+                    icon     = { Icon(Icons.Default.Settings, "Settings") },
+                    label    = { Text("Settings") },
                     selected = selectedItem == 3,
-                    onClick = { selectedItem = 3 }
+                    onClick  = { selectedItem = 3 }
                 )
             }
         }
@@ -315,9 +325,9 @@ fun HomeScreen(
                 1 -> CalendarScreen(viewModel = viewModel)
                 2 -> HistoryScreen(viewModel = viewModel)
                 3 -> SettingsScreen(
-                    viewModel = viewModel,
+                    viewModel     = viewModel,
                     authViewModel = authViewModel,
-                    onShowLogin = { currentScreen = AppScreen.LOGIN }
+                    onShowLogin   = { currentScreen = AppScreen.LOGIN }
                 )
             }
 
