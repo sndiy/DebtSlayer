@@ -1085,7 +1085,7 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
                     value = inputText,
                     onValueChange = { inputText = it.filter { c -> c.isDigit() }; errorMsg = "" },
                     label = { Text("Total Hutang (Rp)") },
-                    placeholder = { Text("12445000") },
+                    placeholder = { Text("1000000") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = errorMsg.isNotEmpty(),
                     supportingText = if (errorMsg.isNotEmpty()) {

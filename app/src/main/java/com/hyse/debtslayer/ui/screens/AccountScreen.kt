@@ -16,17 +16,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hyse.debtslayer.data.auth.AuthRepository
 import com.hyse.debtslayer.data.auth.UserData
+import com.hyse.debtslayer.data.preferences.SyncFrequency
+import com.hyse.debtslayer.data.preferences.SyncPreferences
 import com.hyse.debtslayer.data.sync.CloudSyncRepository
 import com.hyse.debtslayer.ui.theme.SuccessGreen
 import com.hyse.debtslayer.utils.CurrencyFormatter
 import com.hyse.debtslayer.viewmodel.AuthViewModel
 import com.hyse.debtslayer.viewmodel.DebtViewModel
+import com.hyse.debtslayer.worker.AutoSyncWorker
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,12 +47,19 @@ fun AccountScreen(
     val totalDebt by viewModel.totalDebt.collectAsState()
     val customDeadline by viewModel.customDeadline.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
+    // ── Sync state ────────────────────────────────────────────────
     var isSyncing by remember { mutableStateOf(false) }
     var syncMessage by remember { mutableStateOf("") }
     var showLogoutDialog by remember { mutableStateOf(false) }
 
-    // Ambil nickname dari Firestore
+    // ── Auto sync preferences ─────────────────────────────────────
+    val syncPrefs = remember { SyncPreferences(context) }
+    val syncFrequency by syncPrefs.syncFrequency.collectAsState(initial = SyncFrequency.MANUAL)
+    val lastSyncTs by syncPrefs.lastSyncTimestamp.collectAsState(initial = 0L)
+
+    // ── Nickname dari Firestore ───────────────────────────────────
     var nickname by remember { mutableStateOf("") }
     LaunchedEffect(user.uid) {
         nickname = AuthRepository().getNickname()
@@ -101,7 +114,6 @@ fun AccountScreen(
                         .padding(28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Avatar lingkaran dengan inisial
                     Box(
                         modifier = Modifier
                             .size(84.dp)
@@ -134,7 +146,6 @@ fun AccountScreen(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Badge status login
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = SuccessGreen.copy(alpha = 0.15f)
@@ -237,7 +248,6 @@ fun AccountScreen(
 
                     Spacer(Modifier.height(14.dp))
 
-                    // Progress bar pelunasan
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -268,7 +278,7 @@ fun AccountScreen(
                 }
             }
 
-            // ── Cloud Sync ────────────────────────────────────────
+            // ── Cloud Sync Manual ─────────────────────────────────
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -302,7 +312,6 @@ fun AccountScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Tombol Upload
                         Button(
                             onClick = {
                                 scope.launch {
@@ -313,11 +322,12 @@ fun AccountScreen(
                                             authRepository = AuthRepository(),
                                             transactionRepository = viewModel.getTransactionRepository()
                                         )
-                                        syncRepo.uploadAll()
+                                        val result = syncRepo.uploadAll()  // 🆕 terima SyncResult
                                         if (customDeadline != null) {
                                             syncRepo.uploadPreferences(totalDebt, customDeadline!!)
                                         }
-                                        syncMessage = "✅ Upload berhasil! ${transactions.size} transaksi tersimpan."
+                                        syncPrefs.updateLastSync()
+                                        syncMessage = result.uploadSummary()  // 🆕 pesan informatif
                                     } catch (e: Exception) {
                                         syncMessage = "❌ Upload gagal: ${e.message?.take(50)}"
                                     } finally {
@@ -329,15 +339,11 @@ fun AccountScreen(
                             enabled = !isSyncing,
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Icon(
-                                Icons.Default.CloudUpload, null,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Upload")
                         }
 
-                        // Tombol Download
                         OutlinedButton(
                             onClick = {
                                 scope.launch {
@@ -348,8 +354,8 @@ fun AccountScreen(
                                             authRepository = AuthRepository(),
                                             transactionRepository = viewModel.getTransactionRepository()
                                         )
-                                        syncRepo.downloadAll()
-                                        syncMessage = "✅ Download berhasil! Data diperbarui."
+                                        val result = syncRepo.downloadAll()  // 🆕 terima SyncResult
+                                        syncMessage = result.downloadSummary()  // 🆕 pesan informatif
                                     } catch (e: Exception) {
                                         syncMessage = "❌ Download gagal: ${e.message?.take(50)}"
                                     } finally {
@@ -361,16 +367,12 @@ fun AccountScreen(
                             enabled = !isSyncing,
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Icon(
-                                Icons.Default.CloudDownload, null,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Download")
                         }
                     }
 
-                    // Loading indicator
                     if (isSyncing) {
                         Spacer(Modifier.height(10.dp))
                         LinearProgressIndicator(
@@ -385,7 +387,6 @@ fun AccountScreen(
                         )
                     }
 
-                    // Pesan hasil sync
                     if (syncMessage.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
                         val isOk = syncMessage.startsWith("✅")
@@ -404,8 +405,7 @@ fun AccountScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    if (isOk) Icons.Default.CheckCircle
-                                    else Icons.Default.Error,
+                                    if (isOk) Icons.Default.CheckCircle else Icons.Default.Error,
                                     null,
                                     tint = if (isOk) SuccessGreen
                                     else MaterialTheme.colorScheme.error,
@@ -423,6 +423,162 @@ fun AccountScreen(
                 }
             }
 
+            // ── Auto Sync ─────────────────────────────────────────
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Autorenew, null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "Auto Sync",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    // Info terakhir sync
+                    if (lastSyncTs > 0L) {
+                        val dateStr = remember(lastSyncTs) {
+                            SimpleDateFormat("d MMM yyyy, HH:mm", Locale("id", "ID"))
+                                .format(Date(lastSyncTs))
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CheckCircle, null,
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                "Terakhir sync: $dateStr",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Text(
+                            "Belum pernah auto sync",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // Pilihan frekuensi
+                    SyncFrequency.entries.forEach { freq ->
+                        val isSelected = syncFrequency == freq
+                        Card(
+                            onClick = {
+                                scope.launch {
+                                    syncPrefs.setSyncFrequency(freq)
+                                    AutoSyncWorker.schedule(context, freq)
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        scope.launch {
+                                            syncPrefs.setSyncFrequency(freq)
+                                            AutoSyncWorker.schedule(context, freq)
+                                        }
+                                    }
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        freq.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold
+                                        else FontWeight.Normal,
+                                        color = if (isSelected)
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (freq != SyncFrequency.MANUAL) {
+                                        Text(
+                                            "Upload otomatis ${freq.label.lowercase()} saat ada internet",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (isSelected)
+                                                MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                            else
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.CheckCircle, null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Info box
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                Icons.Default.Info, null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                "Auto sync hanya berjalan saat ada koneksi internet. " +
+                                        "Data tidak akan hilang jika offline.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
             // ── Tombol Logout ─────────────────────────────────────
             Button(
                 onClick = { showLogoutDialog = true },
@@ -435,10 +591,7 @@ fun AccountScreen(
                     contentColor = MaterialTheme.colorScheme.onErrorContainer
                 )
             ) {
-                Icon(
-                    Icons.Default.Logout, null,
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Logout", fontWeight = FontWeight.SemiBold)
             }
@@ -447,7 +600,7 @@ fun AccountScreen(
         }
     }
 
-    // ── Dialog Konfirmasi Logout ──────────────────────────────────
+    // ── Dialog Logout ─────────────────────────────────────────────
     if (showLogoutDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
@@ -458,15 +611,12 @@ fun AccountScreen(
                     modifier = Modifier.size(32.dp)
                 )
             },
-            title = {
-                Text("Logout?", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Text("Data lokal tetap tersimpan di HP. Kamu bisa login lagi kapan saja.")
-            },
+            title = { Text("Logout?", fontWeight = FontWeight.Bold) },
+            text = { Text("Data lokal tetap tersimpan di HP. Kamu bisa login lagi kapan saja.") },
             confirmButton = {
                 Button(
                     onClick = {
+                        AutoSyncWorker.cancel(context)  // batalkan jadwal sync
                         authViewModel.signOut()
                         showLogoutDialog = false
                         onBack()
@@ -475,20 +625,15 @@ fun AccountScreen(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     )
-                ) {
-                    Text("Logout")
-                }
+                ) { Text("Logout") }
             },
             dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) {
-                    Text("Batal")
-                }
+                TextButton(onClick = { showLogoutDialog = false }) { Text("Batal") }
             }
         )
     }
 }
 
-// ── Helper composable ─────────────────────────────────────────────────────────
 @Composable
 private fun AccountInfoRow(
     icon: ImageVector,

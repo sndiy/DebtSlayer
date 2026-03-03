@@ -8,14 +8,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.hyse.debtslayer.data.auth.AuthRepository
 import com.hyse.debtslayer.data.auth.UserData
+import com.hyse.debtslayer.data.preferences.SyncPreferences
 import com.hyse.debtslayer.ui.theme.SuccessGreen
 import com.hyse.debtslayer.viewmodel.AuthViewModel
 import com.hyse.debtslayer.viewmodel.DebtViewModel
+import com.hyse.debtslayer.worker.AutoSyncWorker
+import kotlinx.coroutines.flow.first
 
-// ── Enum di LUAR fungsi ───────────────────────────────────────────────────────
 enum class AppScreen { MAIN, STATISTICS, LOGIN }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,6 +31,7 @@ fun HomeScreen(
     onDismissNotifBanner: () -> Unit = {}
 ) {
     val isOnboardingDone by viewModel.isOnboardingDone.collectAsState(initial = null)
+    val context = LocalContext.current
 
     var showOnboarding by remember { mutableStateOf(false) }
     var showFirstSetupLoading by remember { mutableStateOf(false) }
@@ -36,9 +40,20 @@ fun HomeScreen(
     val authRepository = remember { AuthRepository() }
     val authViewModel = remember { AuthViewModel(authRepository) }
     val currentUser by authViewModel.currentUser.collectAsState()
+    val syncPrefs = remember { SyncPreferences(context) }
 
     var currentScreen by remember { mutableStateOf(AppScreen.MAIN) }
     var selectedItem by remember { mutableStateOf(0) }
+
+    // ── Auto-reschedule saat login/logout ─────────────────────────
+    LaunchedEffect(currentUser) {
+        if (currentUser != null) {
+            val freq = syncPrefs.syncFrequency.first()
+            AutoSyncWorker.schedule(context, freq)
+        } else {
+            AutoSyncWorker.cancel(context)
+        }
+    }
 
     // ── Back handler ──────────────────────────────────────────────
     BackHandler(enabled = currentScreen != AppScreen.MAIN) {
@@ -54,13 +69,11 @@ fun HomeScreen(
         }
     }
 
-    // ── CASE 1: DataStore belum diload ────────────────────────────
     if (isOnboardingDone == null) {
         LoadingScreen(viewModel = viewModel, isFirstSetup = false, onReady = {})
         return
     }
 
-    // ── CASE 2: Onboarding belum selesai ─────────────────────────
     if (showOnboarding && !showFirstSetupLoading) {
         OnboardingScreen(
             viewModel = viewModel,
@@ -72,7 +85,6 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 3: First setup loading ───────────────────────────────
     if (showFirstSetupLoading && !appReady) {
         LoadingScreen(
             viewModel = viewModel,
@@ -85,7 +97,6 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 4: Buka app normal ───────────────────────────────────
     if (!appReady && isOnboardingDone == true) {
         LoadingScreen(
             viewModel = viewModel,
@@ -95,7 +106,6 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 5: Statistics Screen ─────────────────────────────────
     if (currentScreen == AppScreen.STATISTICS) {
         StatisticsScreen(
             viewModel = viewModel,
@@ -104,7 +114,6 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 6: Login / Account Screen ───────────────────────────
     if (currentScreen == AppScreen.LOGIN) {
         if (currentUser != null) {
             AccountScreen(
@@ -123,7 +132,6 @@ fun HomeScreen(
         return
     }
 
-    // ── MAIN UI ───────────────────────────────────────────────────
     Scaffold(
         topBar = {
             TopAppBar(
@@ -139,7 +147,6 @@ fun HomeScreen(
                     )
                 },
                 actions = {
-                    // Tombol Statistik
                     IconButton(onClick = { currentScreen = AppScreen.STATISTICS }) {
                         Icon(
                             Icons.Default.BarChart,
@@ -147,13 +154,10 @@ fun HomeScreen(
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
                     }
-                    // Tombol Akun — badge hijau kalau sudah login
                     IconButton(onClick = { currentScreen = AppScreen.LOGIN }) {
                         if (currentUser != null) {
                             BadgedBox(
-                                badge = {
-                                    Badge(containerColor = SuccessGreen)
-                                }
+                                badge = { Badge(containerColor = SuccessGreen) }
                             ) {
                                 Icon(
                                     Icons.Default.AccountCircle,
@@ -222,7 +226,6 @@ fun HomeScreen(
                 )
             }
 
-            // ── Banner notifikasi ─────────────────────────────────
             if (showNotifBanner && !notifGranted) {
                 Card(
                     modifier = Modifier

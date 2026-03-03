@@ -121,4 +121,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }
