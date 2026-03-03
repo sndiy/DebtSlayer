@@ -1016,4 +1016,7 @@ AI normal kembali besok jam 07:00 WIB.
             rebuildChatModel()
         }
     }
+
+    // 🆕 Expose repository untuk CloudSyncRepository
+    fun getTransactionRepository(): TransactionRepository = repository
 }

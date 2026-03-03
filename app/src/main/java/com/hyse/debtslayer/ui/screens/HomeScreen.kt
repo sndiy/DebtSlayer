@@ -1,6 +1,6 @@
 package com.hyse.debtslayer.ui.screens
 
-import androidx.compose.animation.*
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,9 +9,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.hyse.debtslayer.data.auth.AuthRepository
+import com.hyse.debtslayer.data.auth.UserData
+import com.hyse.debtslayer.ui.theme.SuccessGreen
+import com.hyse.debtslayer.viewmodel.AuthViewModel
 import com.hyse.debtslayer.viewmodel.DebtViewModel
-import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.launch
+
+// ── Enum di LUAR fungsi ───────────────────────────────────────────────────────
+enum class AppScreen { MAIN, STATISTICS, LOGIN }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,28 +28,39 @@ fun HomeScreen(
     onDismissNotifBanner: () -> Unit = {}
 ) {
     val isOnboardingDone by viewModel.isOnboardingDone.collectAsState(initial = null)
-    val isDataReady by viewModel.isDataReady.collectAsState()
 
     var showOnboarding by remember { mutableStateOf(false) }
     var showFirstSetupLoading by remember { mutableStateOf(false) }
     var appReady by remember { mutableStateOf(false) }
 
-    // Sinkronisasi state onboarding
+    val authRepository = remember { AuthRepository() }
+    val authViewModel = remember { AuthViewModel(authRepository) }
+    val currentUser by authViewModel.currentUser.collectAsState()
+
+    var currentScreen by remember { mutableStateOf(AppScreen.MAIN) }
+    var selectedItem by remember { mutableStateOf(0) }
+
+    // ── Back handler ──────────────────────────────────────────────
+    BackHandler(enabled = currentScreen != AppScreen.MAIN) {
+        currentScreen = AppScreen.MAIN
+    }
+
+    // ── Sinkronisasi onboarding ───────────────────────────────────
     LaunchedEffect(isOnboardingDone) {
         when (isOnboardingDone) {
-            false -> showOnboarding = true  // belum pernah setup
-            true -> showOnboarding = false  // sudah setup sebelumnya
-            null -> {}                      // masih loading DataStore
+            false -> showOnboarding = true
+            true  -> showOnboarding = false
+            null  -> {}
         }
     }
 
-    // ── CASE 1: DataStore belum diload ──
+    // ── CASE 1: DataStore belum diload ────────────────────────────
     if (isOnboardingDone == null) {
         LoadingScreen(viewModel = viewModel, isFirstSetup = false, onReady = {})
         return
     }
 
-    // ── CASE 2: Onboarding belum selesai ──
+    // ── CASE 2: Onboarding belum selesai ─────────────────────────
     if (showOnboarding && !showFirstSetupLoading) {
         OnboardingScreen(
             viewModel = viewModel,
@@ -56,7 +72,7 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 3: First setup loading — tunggu isDataReady dari ViewModel ──
+    // ── CASE 3: First setup loading ───────────────────────────────
     if (showFirstSetupLoading && !appReady) {
         LoadingScreen(
             viewModel = viewModel,
@@ -69,7 +85,7 @@ fun HomeScreen(
         return
     }
 
-    // ── CASE 4: Buka app normal (sudah pernah setup) — tunggu isDataReady ──
+    // ── CASE 4: Buka app normal ───────────────────────────────────
     if (!appReady && isOnboardingDone == true) {
         LoadingScreen(
             viewModel = viewModel,
@@ -79,25 +95,85 @@ fun HomeScreen(
         return
     }
 
-    var selectedItem by remember { mutableStateOf(0) }
+    // ── CASE 5: Statistics Screen ─────────────────────────────────
+    if (currentScreen == AppScreen.STATISTICS) {
+        StatisticsScreen(
+            viewModel = viewModel,
+            onBack = { currentScreen = AppScreen.MAIN }
+        )
+        return
+    }
 
+    // ── CASE 6: Login / Account Screen ───────────────────────────
+    if (currentScreen == AppScreen.LOGIN) {
+        if (currentUser != null) {
+            AccountScreen(
+                user = currentUser!!,
+                authViewModel = authViewModel,
+                viewModel = viewModel,
+                onBack = { currentScreen = AppScreen.MAIN }
+            )
+        } else {
+            LoginScreen(
+                authViewModel = authViewModel,
+                onLoginSuccess = { currentScreen = AppScreen.MAIN },
+                onBack = { currentScreen = AppScreen.MAIN }
+            )
+        }
+        return
+    }
+
+    // ── MAIN UI ───────────────────────────────────────────────────
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         when (selectedItem) {
-                            0 -> "💬 Chat dengan Mai"
-                            1 -> "📅 Kalender"
-                            2 -> "📊 Riwayat Transaksi"
-                            3 -> "⚙️ Pengaturan"
+                            0    -> "💬 Chat dengan Mai"
+                            1    -> "📅 Kalender"
+                            2    -> "📊 Riwayat Transaksi"
+                            3    -> "⚙️ Pengaturan"
                             else -> "DebtSlayer"
                         }
                     )
                 },
+                actions = {
+                    // Tombol Statistik
+                    IconButton(onClick = { currentScreen = AppScreen.STATISTICS }) {
+                        Icon(
+                            Icons.Default.BarChart,
+                            contentDescription = "Statistik",
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                    // Tombol Akun — badge hijau kalau sudah login
+                    IconButton(onClick = { currentScreen = AppScreen.LOGIN }) {
+                        if (currentUser != null) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(containerColor = SuccessGreen)
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.AccountCircle,
+                                    contentDescription = "Akun",
+                                    tint = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
+                        } else {
+                            Icon(
+                                Icons.Default.AccountCircle,
+                                contentDescription = "Akun",
+                                tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
         },
@@ -130,19 +206,23 @@ fun HomeScreen(
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier
-            .padding(paddingValues)
-            .fillMaxSize()
+        Box(
+            modifier = Modifier
+                .padding(paddingValues)
+                .fillMaxSize()
         ) {
-            // Screen content
             when (selectedItem) {
                 0 -> ChatScreen(viewModel = viewModel)
                 1 -> CalendarScreen(viewModel = viewModel)
                 2 -> HistoryScreen(viewModel = viewModel)
-                3 -> SettingsScreen(viewModel = viewModel)
+                3 -> SettingsScreen(
+                    viewModel = viewModel,
+                    authViewModel = authViewModel,
+                    onShowLogin = { currentScreen = AppScreen.LOGIN }
+                )
             }
 
-            // ── Banner izin notifikasi — muncul di bawah, bisa dismiss ──
+            // ── Banner notifikasi ─────────────────────────────────
             if (showNotifBanner && !notifGranted) {
                 Card(
                     modifier = Modifier
