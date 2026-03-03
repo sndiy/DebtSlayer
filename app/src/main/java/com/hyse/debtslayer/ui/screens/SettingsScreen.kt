@@ -1076,7 +1076,7 @@ fun EditTotalDebtDialog(currentTotal: Long, onConfirm: (Long) -> Unit, onDismiss
         text = {
             Column {
                 Text(
-                    "Masukkan nominal total hutang dalam Rupiah.\nContoh: 12445000",
+                    "Masukkan nominal total hutang dalam Rupiah.\nContoh: 1000000",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )

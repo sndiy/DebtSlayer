@@ -24,7 +24,8 @@ import com.hyse.debtslayer.viewmodel.AuthViewModel
 fun LoginScreen(
     authViewModel: AuthViewModel,
     onLoginSuccess: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onContinueAsGuest: (() -> Unit)? = null
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -35,7 +36,10 @@ fun LoginScreen(
 
     val authState by authViewModel.authState.collectAsState()
 
-    BackHandler { onBack() }
+    // Back handler hanya aktif kalau bukan screen awal
+    if (onContinueAsGuest == null) {
+        BackHandler { onBack() }
+    }
 
     LaunchedEffect(authState) {
         if (authState is AuthState.Success) {
@@ -44,7 +48,6 @@ fun LoginScreen(
         }
     }
 
-    // ── Pakai background dari tema ────────────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -59,25 +62,28 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center
         ) {
 
-            // ── Tombol back ───────────────────────────────────────
-            Row(modifier = Modifier.fillMaxWidth()) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.Default.ArrowBack,
-                        contentDescription = "Kembali",
-                        tint = MaterialTheme.colorScheme.onBackground  // ✅ ikut tema
-                    )
+            // ── Tombol back (hanya kalau bukan screen awal) ───────
+            if (onContinueAsGuest == null) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = "Kembali",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
                 }
+                Spacer(Modifier.height(8.dp))
+            } else {
+                Spacer(Modifier.height(32.dp))
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            // ── Icon header ───────────────────────────────────────
+            // ── Icon ──────────────────────────────────────────────
             Icon(
                 Icons.Default.AccountCircle,
                 contentDescription = null,
                 modifier = Modifier.size(72.dp),
-                tint = MaterialTheme.colorScheme.primary  // ✅ ikut tema
+                tint = MaterialTheme.colorScheme.primary
             )
 
             Spacer(Modifier.height(8.dp))
@@ -87,23 +93,25 @@ fun LoginScreen(
                 when {
                     showReset -> "Reset Password"
                     isSignUp  -> "Buat Akun"
+                    onContinueAsGuest != null -> "Selamat Datang"
                     else      -> "Masuk"
                 },
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground  // ✅ ikut tema
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Spacer(Modifier.height(4.dp))
 
             Text(
                 when {
-                    showReset -> "Masukkan email kamu"
-                    isSignUp  -> "Daftar untuk sync data hutang"
-                    else      -> "Sinkronkan data hutang ke cloud"
+                    showReset             -> "Link reset akan dikirim ke email kamu"
+                    isSignUp              -> "Daftar untuk sync data hutang ke cloud"
+                    onContinueAsGuest != null -> "Login atau daftar untuk mulai"
+                    else                  -> "Sinkronkan data hutang ke cloud"
                 },
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant  // ✅ ikut tema
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(Modifier.height(32.dp))
@@ -150,7 +158,7 @@ fun LoginScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // ── Password ──────────────────────────────────────────
+            // ── Password (sembunyikan saat reset) ─────────────────
             if (!showReset) {
                 OutlinedTextField(
                     value = password,
@@ -196,9 +204,9 @@ fun LoginScreen(
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = if (isInfo)
-                            MaterialTheme.colorScheme.tertiaryContainer  // ✅ ikut tema
+                            MaterialTheme.colorScheme.tertiaryContainer
                         else
-                            MaterialTheme.colorScheme.errorContainer     // ✅ ikut tema
+                            MaterialTheme.colorScheme.errorContainer
                     ),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
@@ -209,21 +217,16 @@ fun LoginScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(
-                            if (isInfo) Icons.Default.CheckCircle
-                            else Icons.Default.Error,
+                            if (isInfo) Icons.Default.CheckCircle else Icons.Default.Error,
                             null,
-                            tint = if (isInfo)
-                                MaterialTheme.colorScheme.tertiary        // ✅ ikut tema
-                            else
-                                MaterialTheme.colorScheme.error,          // ✅ ikut tema
+                            tint = if (isInfo) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             msg,
-                            color = if (isInfo)
-                                MaterialTheme.colorScheme.onTertiaryContainer  // ✅ ikut tema
-                            else
-                                MaterialTheme.colorScheme.onErrorContainer,    // ✅ ikut tema
+                            color = if (isInfo) MaterialTheme.colorScheme.onTertiaryContainer
+                            else MaterialTheme.colorScheme.onErrorContainer,
                             fontSize = 13.sp
                         )
                     }
@@ -250,8 +253,8 @@ fun LoginScreen(
                         (showReset || password.isNotBlank()) &&
                         (!isSignUp || nickname.isNotBlank()),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,         // ✅ ikut tema
-                    contentColor = MaterialTheme.colorScheme.onPrimary,         // ✅ ikut tema
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -259,7 +262,7 @@ fun LoginScreen(
                 if (authState is AuthState.Loading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,  // ✅ ikut tema
+                        color = MaterialTheme.colorScheme.onPrimary,
                         strokeWidth = 2.dp
                     )
                 } else {
@@ -282,12 +285,14 @@ fun LoginScreen(
                 TextButton(onClick = {
                     isSignUp = !isSignUp
                     nickname = ""
+                    email = ""
+                    password = ""
                     authViewModel.clearState()
                 }) {
                     Text(
                         if (isSignUp) "Sudah punya akun? Masuk"
                         else "Belum punya akun? Daftar",
-                        color = MaterialTheme.colorScheme.primary  // ✅ ikut tema
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -296,37 +301,82 @@ fun LoginScreen(
             if (!isSignUp) {
                 TextButton(onClick = {
                     showReset = !showReset
+                    email = ""
                     authViewModel.clearState()
                 }) {
                     Text(
                         if (showReset) "Kembali ke Login" else "Lupa password?",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,  // ✅ ikut tema
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
                 }
+            }
+
+            // ── Tombol Guest (hanya di screen awal) ───────────────
+            if (onContinueAsGuest != null && !isSignUp && !showReset) {
+                Spacer(Modifier.height(8.dp))
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = onContinueAsGuest,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.PersonOutline,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Lanjut sebagai Guest",
+                        fontSize = 14.sp
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    "Data guest tidak tersinkron ke cloud",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+
+                Spacer(Modifier.height(16.dp))
             }
         }
     }
 }
 
-// ── Helper: warna OutlinedTextField yang konsisten dengan tema ────────────────
+// ── Helper warna TextField ────────────────────────────────────────────────────
 @Composable
 private fun outlinedTextFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-    focusedLabelColor = MaterialTheme.colorScheme.primary,
-    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    cursorColor = MaterialTheme.colorScheme.primary,
-    focusedLeadingIconColor = MaterialTheme.colorScheme.primary,
-    unfocusedLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    focusedTrailingIconColor = MaterialTheme.colorScheme.primary,
-    unfocusedTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-    unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-    focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedTextColor             = MaterialTheme.colorScheme.onSurface,
+    unfocusedTextColor           = MaterialTheme.colorScheme.onSurface,
+    focusedBorderColor           = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor         = MaterialTheme.colorScheme.outline,
+    focusedLabelColor            = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor          = MaterialTheme.colorScheme.onSurfaceVariant,
+    cursorColor                  = MaterialTheme.colorScheme.primary,
+    focusedLeadingIconColor      = MaterialTheme.colorScheme.primary,
+    unfocusedLeadingIconColor    = MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedTrailingIconColor     = MaterialTheme.colorScheme.primary,
+    unfocusedTrailingIconColor   = MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedPlaceholderColor      = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+    unfocusedPlaceholderColor    = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+    focusedSupportingTextColor   = MaterialTheme.colorScheme.onSurfaceVariant,
     unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    focusedContainerColor = MaterialTheme.colorScheme.surface,
-    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+    focusedContainerColor        = MaterialTheme.colorScheme.surface,
+    unfocusedContainerColor      = MaterialTheme.colorScheme.surface
 )

@@ -16,32 +16,46 @@ class CloudSyncRepository(
     private val uid get() = authRepository.currentUid
         ?: throw IllegalStateException("User belum login")
 
-    // ── Hash sederhana untuk 1 transaksi ─────────────────────────
-    // Kalau id, amount, source, date tidak berubah → hash sama → skip upload
+    // ── Checksum per transaksi ────────────────────────────────────
     private fun Transaction.checksum(): String =
         "${id}_${amount}_${source}_${date}".hashCode().toString()
 
-    // ── Upload — hanya yang berubah ───────────────────────────────
-    suspend fun uploadAll(): SyncResult {
-        val transactions = transactionRepository.allTransactions.firstOrNull() ?: return SyncResult(0, 0)
+    // ── Upload SEMUA — transaksi + preferences ────────────────────
+    suspend fun uploadAll(
+        totalDebt: Long? = null,
+        deadline: String? = null
+    ): SyncResult {
+        val transactions = transactionRepository.allTransactions.firstOrNull()
+            ?: return SyncResult(0, 0)
 
-        // Ambil checksum yang sudah tersimpan di cloud
+        // ── 1. Upload preferences kalau ada ──────────────────────
+        if (totalDebt != null && totalDebt > 0 && deadline != null) {
+            firestore.collection("users").document(uid)
+                .set(mapOf(
+                    "totalDebt" to totalDebt,
+                    "deadline"  to deadline,
+                    "updatedAt" to System.currentTimeMillis()
+                ), SetOptions.merge()).await()
+        }
+
+        // ── 2. Upload transaksi yang berubah saja ─────────────────
         val metaRef = firestore
             .collection("users").document(uid)
             .collection("_meta").document("checksums")
+
         val metaDoc = try { metaRef.get().await() } catch (e: Exception) { null }
         val cloudChecksums = metaDoc?.data?.mapValues { it.value.toString() } ?: emptyMap()
 
-        // Filter: hanya transaksi yang checksumnya berbeda dari cloud
         val changed = transactions.filter { tx ->
-            val localHash = tx.checksum()
-            val cloudHash = cloudChecksums[tx.id.toString()]
-            localHash != cloudHash
+            tx.checksum() != cloudChecksums[tx.id.toString()]
         }
 
-        if (changed.isEmpty()) return SyncResult(total = transactions.size, uploaded = 0)
+        if (changed.isEmpty()) return SyncResult(
+            total = transactions.size,
+            uploaded = 0,
+            prefsUploaded = totalDebt != null
+        )
 
-        // Upload hanya yang berubah
         val batch = firestore.batch()
         val newChecksums = mutableMapOf<String, String>()
 
@@ -59,57 +73,109 @@ class CloudSyncRepository(
         }
 
         batch.commit().await()
-
-        // Update checksum di cloud — merge supaya yang lama tidak hilang
         metaRef.set(newChecksums, SetOptions.merge()).await()
 
-        return SyncResult(total = transactions.size, uploaded = changed.size)
+        return SyncResult(
+            total          = transactions.size,
+            uploaded       = changed.size,
+            prefsUploaded  = totalDebt != null
+        )
     }
 
-    // ── Hapus checksum transaksi yang sudah dihapus lokal ─────────
-    // Dipanggil setelah user hapus transaksi, supaya checksum tidak stale
+    // ── Remove checksum saat transaksi dihapus ────────────────────
     suspend fun removeChecksum(transactionId: Long) {
         try {
             val metaRef = firestore
                 .collection("users").document(uid)
                 .collection("_meta").document("checksums")
-            metaRef.update(transactionId.toString(), com.google.firebase.firestore.FieldValue.delete()).await()
-        } catch (e: Exception) { /* abaikan kalau gagal */ }
+            metaRef.update(
+                transactionId.toString(),
+                com.google.firebase.firestore.FieldValue.delete()
+            ).await()
+        } catch (e: Exception) { /* abaikan */ }
     }
 
-    // ── Download — skip transaksi yang sudah ada di lokal ─────────
-    suspend fun downloadAll(): SyncResult {
+    // ── Download transaksi + preferences ─────────────────────────
+    suspend fun downloadAll(): DownloadResult {
+        // ── 1. Download preferences (totalDebt, deadline) ─────────
+        val prefsDoc = try {
+            firestore.collection("users").document(uid).get().await()
+        } catch (e: Exception) { null }
+
+        val cloudTotalDebt = prefsDoc?.getLong("totalDebt")
+        val cloudDeadline  = prefsDoc?.getString("deadline")
+
+        // ── 2. Download transaksi ─────────────────────────────────
         val snapshot = firestore
             .collection("users").document(uid)
             .collection("transactions")
             .get().await()
 
-        // Ambil semua ID transaksi lokal dulu
-        val localIds = transactionRepository.allTransactions
+        val localMap = transactionRepository.allTransactions
             .firstOrNull()
-            ?.map { it.id }
-            ?.toSet()
-            ?: emptySet()
+            ?.associateBy { it.id }
+            ?: emptyMap()
 
         var inserted = 0
-        snapshot.documents.forEach { doc ->
-            val tx = Transaction(
-                id     = doc.getLong("id") ?: 0L,
-                amount = doc.getLong("amount") ?: 0L,
-                source = doc.getString("source") ?: "Cloud sync",
-                date   = doc.getLong("date") ?: System.currentTimeMillis()
-            )
-            // Skip kalau sudah ada di lokal
-            if (tx.amount > 0 && tx.id !in localIds) {
-                transactionRepository.insert(tx)
-                inserted++
+        var updated  = 0
+
+        if (!snapshot.isEmpty) {
+            snapshot.documents.forEach { doc ->
+                val cloudTx = Transaction(
+                    id     = doc.getLong("id") ?: 0L,
+                    amount = doc.getLong("amount") ?: 0L,
+                    source = doc.getString("source") ?: "Cloud sync",
+                    date   = doc.getLong("date") ?: System.currentTimeMillis()
+                )
+
+                if (cloudTx.amount <= 0) return@forEach
+
+                val localTx = localMap[cloudTx.id]
+                when {
+                    localTx == null -> {
+                        transactionRepository.insert(cloudTx)
+                        inserted++
+                    }
+                    localTx.amount != cloudTx.amount ||
+                            localTx.source != cloudTx.source ||
+                            localTx.date   != cloudTx.date   -> {
+                        transactionRepository.insert(cloudTx)
+                        updated++
+                    }
+                    else -> { /* skip */ }
+                }
             }
         }
 
-        return SyncResult(total = snapshot.size(), downloaded = inserted)
+        return DownloadResult(
+            totalCloud    = snapshot.size(),
+            downloaded    = inserted,
+            updated       = updated,
+            totalDebt     = cloudTotalDebt,
+            deadline      = cloudDeadline
+        )
     }
 
-    // ── Upload preferences ────────────────────────────────────────
+    // ── Cek apakah ada data di cloud ─────────────────────────────
+    suspend fun hasCloudData(): Boolean {
+        return try {
+            // Cek transaksi
+            val txSnapshot = firestore
+                .collection("users").document(uid)
+                .collection("transactions")
+                .limit(1)
+                .get().await()
+            if (!txSnapshot.isEmpty) return true
+
+            // Cek preferences (totalDebt tersimpan)
+            val prefsDoc = firestore
+                .collection("users").document(uid)
+                .get().await()
+            prefsDoc.exists() && prefsDoc.contains("totalDebt")
+        } catch (e: Exception) { false }
+    }
+
+    // ── Upload preferences saja (tetap ada untuk kompatibilitas) ─
     suspend fun uploadPreferences(totalDebt: Long, deadline: String) {
         firestore.collection("users").document(uid)
             .set(mapOf(
@@ -119,27 +185,49 @@ class CloudSyncRepository(
             ), SetOptions.merge()).await()
     }
 
-    // ── Download preferences ──────────────────────────────────────
+    // ── Download preferences saja ─────────────────────────────────
     suspend fun downloadPreferences(): Map<String, Any>? {
         val doc = firestore.collection("users").document(uid).get().await()
         return if (doc.exists()) doc.data else null
     }
 }
 
-// ── Result class untuk info berapa yang diupload/download ────────────────────
+// ── SyncResult untuk upload ───────────────────────────────────────────────────
 data class SyncResult(
     val total: Int = 0,
     val uploaded: Int = 0,
-    val downloaded: Int = 0
+    val prefsUploaded: Boolean = false,
+    val updated: Int = 0
 ) {
-    val isEfficient: Boolean get() = uploaded < total || downloaded < total
     fun uploadSummary(): String = when {
-        uploaded == 0  -> "✅ Semua data sudah sinkron, tidak ada yang perlu diupload."
-        uploaded == total -> "✅ Upload berhasil! $uploaded transaksi diunggah."
-        else           -> "✅ Upload berhasil! $uploaded dari $total transaksi diperbarui."
+        uploaded == 0 && !prefsUploaded ->
+            "✅ Semua data sudah sinkron, tidak ada yang perlu diupload."
+        uploaded == 0 && prefsUploaded ->
+            "✅ Pengaturan hutang berhasil diupload."
+        uploaded == total ->
+            "✅ Upload berhasil! $uploaded transaksi + pengaturan hutang diunggah."
+        else ->
+            "✅ Upload berhasil! $uploaded dari $total transaksi + pengaturan hutang diperbarui."
     }
-    fun downloadSummary(): String = when {
-        downloaded == 0 -> "✅ Semua data sudah sinkron, tidak ada yang baru."
-        else            -> "✅ Download berhasil! $downloaded transaksi baru ditambahkan."
+}
+
+// ── DownloadResult — bawa juga totalDebt & deadline dari cloud ───────────────
+data class DownloadResult(
+    val totalCloud: Int = 0,
+    val downloaded: Int = 0,
+    val updated: Int = 0,
+    val totalDebt: Long? = null,      // ✅ dari Firestore
+    val deadline: String? = null       // ✅ dari Firestore
+) {
+    fun downloadSummary(): String {
+        val txInfo = when {
+            downloaded == 0 && updated == 0 -> "Transaksi sudah sinkron."
+            downloaded > 0 && updated > 0   -> "$downloaded transaksi baru, $updated diperbarui."
+            downloaded > 0                  -> "$downloaded transaksi baru ditambahkan."
+            else                            -> "$updated transaksi diperbarui."
+        }
+        val prefsInfo = if (totalDebt != null && deadline != null)
+            " Pengaturan hutang & deadline berhasil dimuat." else ""
+        return "✅ $txInfo$prefsInfo"
     }
 }

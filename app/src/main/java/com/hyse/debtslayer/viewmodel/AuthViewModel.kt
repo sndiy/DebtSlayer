@@ -22,6 +22,10 @@ class AuthViewModel(
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
+    // ✅ Flag: apakah ini akun baru (daftar) atau login akun lama
+    private val _isNewAccount = MutableStateFlow(false)
+    val isNewAccount: StateFlow<Boolean> = _isNewAccount.asStateFlow()
+
     val currentUser: StateFlow<UserData?> = authRepository.currentUser
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
@@ -30,9 +34,12 @@ class AuthViewModel(
     fun signIn(email: String, password: String) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
-            _authState.value = when (val r = authRepository.signIn(email, password)) {
-                is AuthResult.Success -> AuthState.Success(r.user)
-                is AuthResult.Error   -> AuthState.Error(r.message)
+            when (val r = authRepository.signIn(email, password)) {
+                is AuthResult.Success -> {
+                    _isNewAccount.value = false  // ✅ login akun lama → skip onboarding
+                    _authState.value = AuthState.Success(r.user)
+                }
+                is AuthResult.Error -> _authState.value = AuthState.Error(r.message)
             }
         }
     }
@@ -52,9 +59,12 @@ class AuthViewModel(
         }
         viewModelScope.launch {
             _authState.value = AuthState.Loading
-            _authState.value = when (val r = authRepository.signUp(email, password, nickname)) {
-                is AuthResult.Success -> AuthState.Success(r.user)
-                is AuthResult.Error   -> AuthState.Error(r.message)
+            when (val r = authRepository.signUp(email, password, nickname)) {
+                is AuthResult.Success -> {
+                    _isNewAccount.value = true  // ✅ akun baru → wajib onboarding
+                    _authState.value = AuthState.Success(r.user)
+                }
+                is AuthResult.Error -> _authState.value = AuthState.Error(r.message)
             }
         }
     }
@@ -71,6 +81,7 @@ class AuthViewModel(
 
     fun signOut() {
         authRepository.signOut()
+        _isNewAccount.value = false
         _authState.value = AuthState.Idle
     }
 

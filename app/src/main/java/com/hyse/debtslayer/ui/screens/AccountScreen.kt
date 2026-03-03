@@ -322,12 +322,13 @@ fun AccountScreen(
                                             authRepository = AuthRepository(),
                                             transactionRepository = viewModel.getTransactionRepository()
                                         )
-                                        val result = syncRepo.uploadAll()  // 🆕 terima SyncResult
-                                        if (customDeadline != null) {
-                                            syncRepo.uploadPreferences(totalDebt, customDeadline!!)
-                                        }
+                                        // ✅ Kirim totalDebt & deadline sekaligus
+                                        val result = syncRepo.uploadAll(
+                                            totalDebt = totalDebt,
+                                            deadline  = customDeadline
+                                        )
                                         syncPrefs.updateLastSync()
-                                        syncMessage = result.uploadSummary()  // 🆕 pesan informatif
+                                        syncMessage = result.uploadSummary()
                                     } catch (e: Exception) {
                                         syncMessage = "❌ Upload gagal: ${e.message?.take(50)}"
                                     } finally {
@@ -354,8 +355,17 @@ fun AccountScreen(
                                             authRepository = AuthRepository(),
                                             transactionRepository = viewModel.getTransactionRepository()
                                         )
-                                        val result = syncRepo.downloadAll()  // 🆕 terima SyncResult
-                                        syncMessage = result.downloadSummary()  // 🆕 pesan informatif
+                                        val result = syncRepo.downloadAll()
+
+                                        // ✅ Apply totalDebt & deadline ke ViewModel kalau ada di cloud
+                                        if (result.totalDebt != null && result.totalDebt > 0) {
+                                            viewModel.updateTotalDebtFromSettings(result.totalDebt)
+                                        }
+                                        if (!result.deadline.isNullOrBlank()) {
+                                            viewModel.updateDeadlineFromSettings(result.deadline)
+                                        }
+
+                                        syncMessage = result.downloadSummary()
                                     } catch (e: Exception) {
                                         syncMessage = "❌ Download gagal: ${e.message?.take(50)}"
                                     } finally {
