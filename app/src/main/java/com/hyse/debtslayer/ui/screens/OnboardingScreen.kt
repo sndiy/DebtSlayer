@@ -32,7 +32,10 @@ import java.util.*
 @Composable
 fun OnboardingScreen(
     viewModel: DebtViewModel,
-    onFinished: () -> Unit
+    onFinished: () -> Unit,
+    // ✅ FIX: callback untuk upload ke cloud setelah onboarding selesai.
+    // Dipanggil dengan totalDebt & deadline. Null = tidak upload (mode guest).
+    onUploadToCloud: ((totalDebt: Long, deadline: String) -> Unit)? = null
 ) {
     var currentStep by remember { mutableStateOf(0) }
     val totalSteps = 3
@@ -47,7 +50,6 @@ fun OnboardingScreen(
     var selectedDeadline by remember { mutableStateOf<Calendar?>(null) }
     var deadlineError by remember { mutableStateOf("") }
 
-    // ✅ FIX: alpha subtitle disesuaikan per tema — dark lebih tinggi supaya terbaca
     val subtitleAlpha = if (isDark) 0.85f else 0.7f
     val tertiaryAlpha = if (isDark) 0.75f else 0.6f
 
@@ -70,7 +72,6 @@ fun OnboardingScreen(
                         .clip(CircleShape)
                         .background(
                             if (index <= currentStep) MaterialTheme.colorScheme.primary
-                            // ✅ FIX: dot inactive lebih visible di dark
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.35f else 0.2f)
                         )
                 )
@@ -88,7 +89,6 @@ fun OnboardingScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    // ✅ FIX: judul pakai onBackground supaya selalu kontras
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Spacer(Modifier.height(12.dp))
@@ -96,7 +96,6 @@ fun OnboardingScreen(
                     "Aku akan bantu kamu melunasi hutang. Bukan karena aku peduli — tapi karena kamu jelas butuh bantuan.",
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Center,
-                    // ✅ FIX: alpha lebih tinggi di dark
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = subtitleAlpha)
                 )
                 Spacer(Modifier.height(32.dp))
@@ -122,7 +121,6 @@ fun OnboardingScreen(
                     "Masukkan jumlah total yang harus kamu lunasi.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
-                    // ✅ FIX
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = subtitleAlpha)
                 )
                 Spacer(Modifier.height(32.dp))
@@ -162,7 +160,6 @@ fun OnboardingScreen(
                     "Pilih tanggal target kamu harus sudah lunas.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
-                    // ✅ FIX
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = subtitleAlpha)
                 )
                 Spacer(Modifier.height(32.dp))
@@ -191,7 +188,6 @@ fun OnboardingScreen(
                             Text(
                                 "Deadline",
                                 style = MaterialTheme.typography.labelMedium,
-                                // ✅ FIX: onSurfaceVariant sudah diperbaiki di Theme.kt → lebih terang
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.height(4.dp))
@@ -208,14 +204,12 @@ fun OnboardingScreen(
                                 Text(
                                     "$daysLeft hari lagi • target Rp ${formatter.format(dailyTarget)}/hari",
                                     style = MaterialTheme.typography.bodySmall,
-                                    // ✅ FIX
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
                                 Text(
                                     "Ketuk untuk pilih tanggal",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    // ✅ FIX: alpha lebih tinggi di dark
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDark) 0.8f else 0.6f)
                                 )
                             }
@@ -268,7 +262,13 @@ fun OnboardingScreen(
                                 else -> {
                                     val debt = totalDebtInput.toLong()
                                     val deadlineStr = dateSaveFormat.format(selectedDeadline!!.time)
+
+                                    // Simpan ke lokal (selalu)
                                     viewModel.completeOnboarding(debt, deadlineStr)
+
+                                    // ✅ FIX: Upload ke cloud jika user login (bukan guest)
+                                    onUploadToCloud?.invoke(debt, deadlineStr)
+
                                     onFinished()
                                 }
                             }
@@ -321,13 +321,11 @@ fun OnboardingInfoCard(icon: String, title: String, desc: String) {
                     title,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    // ✅ FIX: judul card pakai onSurfaceVariant yang sudah diperbaiki di Theme.kt
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     desc,
                     style = MaterialTheme.typography.bodySmall,
-                    // ✅ FIX: deskripsi alpha lebih tinggi di dark
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDark) 0.85f else 0.7f)
                 )
             }

@@ -497,7 +497,7 @@ fun buildCalendarData(
     displayedMonth: Calendar,
     totalDebt: Long,
     activeDeadline: String = "2026-08-17",
-    setupDate: String? = null  // ✅ BARU
+    setupDate: String? = null
 ): List<DayData?> {
     val today = Calendar.getInstance()
     val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
@@ -509,11 +509,56 @@ fun buildCalendarData(
     val daysInMonth = displayedMonth.getActualMaximum(Calendar.DAY_OF_MONTH)
     val deadlineFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
 
-    // ✅ Parse deadline untuk comparison
     val deadlineDate = try {
-        deadlineFormat.parse(activeDeadline)?.time
-    } catch (e: Exception) {
-        null
+        deadlineFormat.parse(activeDeadline)?.let { parsed ->
+            Calendar.getInstance().apply {
+                time = parsed
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+        }
+    } catch (e: Exception) { null }
+
+    // ✅ Tentukan "hari mulai tracking"
+    // Prioritas: setupDate → tanggal transaksi pertama → hari ini
+    val trackingStartCal: Calendar = run {
+        // Coba dari setupDate
+        if (!setupDate.isNullOrBlank()) {
+            try {
+                val parsed = dayFormat.parse(setupDate)
+                if (parsed != null) {
+                    return@run Calendar.getInstance().apply {
+                        time = parsed
+                        set(Calendar.HOUR_OF_DAY, 0)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                }
+            } catch (e: Exception) { /* fallback */ }
+        }
+
+        // Fallback: tanggal transaksi paling awal
+        val earliestTx = transactions.minByOrNull { it.date }
+        if (earliestTx != null) {
+            return@run Calendar.getInstance().apply {
+                timeInMillis = earliestTx.date
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+        }
+
+        // Fallback terakhir: hari ini
+        Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
     }
 
     val result = mutableListOf<DayData?>()
@@ -522,74 +567,59 @@ fun buildCalendarData(
     for (day in 1..daysInMonth) {
         val dayCal = (displayedMonth.clone() as Calendar).apply {
             set(Calendar.DAY_OF_MONTH, day)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
         }
         val dayKey = dayFormat.format(dayCal.time)
 
-        // ✅ Cek apakah hari ini = deadline
         val isDeadline = deadlineDate != null && dayCal.timeInMillis == deadlineDate
 
-        // ✅ Cek apakah tanggal < setup date → NO_DATA (tidak dihitung)
-        val isBeforeSetup = if (setupDate != null) {
-            try {
-                val setupCal = Calendar.getInstance().apply {
-                    time = dayFormat.parse(setupDate)!!
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                dayCal.before(setupCal)
-            } catch (e: Exception) {
-                false
-            }
-        } else false
-
-        if (isBeforeSetup) {
-            // ✅ Tanggal sebelum setup → NO_DATA (tidak ada icon, tidak dihitung)
+        // ✅ Sebelum tracking start → NO_DATA (tidak dihitung, tidak ada icon)
+        val isBeforeTracking = dayCal.before(trackingStartCal)
+        if (isBeforeTracking) {
             result.add(DayData(
-                date = dayCal,
-                status = DayStatus.NO_DATA,
+                date         = dayCal,
+                status       = DayStatus.NO_DATA,
                 totalDeposit = 0L,
                 targetThatDay = 0L,
-                shortfall = 0L,
-                isDeadline = isDeadline
+                shortfall    = 0L,
+                isDeadline   = isDeadline
             ))
             continue
         }
 
-        val isFuture = dayCal.after(today) &&
-                !(dayCal.get(Calendar.DAY_OF_MONTH) == today.get(Calendar.DAY_OF_MONTH) &&
-                        dayCal.get(Calendar.MONTH) == today.get(Calendar.MONTH) &&
-                        dayCal.get(Calendar.YEAR) == today.get(Calendar.YEAR))
+        val isFuture = dayCal.after(today)
 
         if (isFuture) {
-            val paidSoFar = transactions.filter { it.date < dayCal.timeInMillis }.sumOf { it.amount }
+            val paidSoFar = transactions
+                .filter { it.date < dayCal.timeInMillis }
+                .sumOf { it.amount }
             val remaining = (totalDebt - paidSoFar).coerceAtLeast(0)
             val daysLeft = calculateDaysLeft(dayCal, deadlineFormat, activeDeadline)
             val rawTarget = if (daysLeft > 0) remaining / daysLeft else 0L
-            val targetThatDay = CurrencyFormatter.ceilToThousand(rawTarget).coerceAtLeast(10_000L)
+            val targetThatDay = CurrencyFormatter.ceilToThousand(rawTarget).coerceAtLeast(0L)
 
             result.add(DayData(
-                date = dayCal,
-                status = DayStatus.FUTURE,
-                totalDeposit = 0L,
+                date          = dayCal,
+                status        = DayStatus.FUTURE,
+                totalDeposit  = 0L,
                 targetThatDay = targetThatDay,
-                shortfall = targetThatDay,
-                isDeadline = isDeadline
+                shortfall     = targetThatDay,
+                isDeadline    = isDeadline
             ))
         } else {
-            val paidBeforeToday = transactions.filter {
-                val txDay = dayFormat.format(Date(it.date))
-                txDay < dayKey
-            }.sumOf { it.amount }
+            val paidBeforeToday = transactions
+                .filter { dayFormat.format(Date(it.date)) < dayKey }
+                .sumOf { it.amount }
 
             val remainingAtStartOfDay = (totalDebt - paidBeforeToday).coerceAtLeast(0)
             val daysFromThatDayToDeadline = calculateDaysLeft(dayCal, deadlineFormat, activeDeadline)
             val targetThatDay = if (daysFromThatDayToDeadline > 0) {
-                val raw = remainingAtStartOfDay / daysFromThatDayToDeadline
-                CurrencyFormatter.ceilToThousand(raw).coerceAtLeast(10_000L)
+                CurrencyFormatter.ceilToThousand(
+                    remainingAtStartOfDay / daysFromThatDayToDeadline
+                ).coerceAtLeast(0L)
             } else {
                 remainingAtStartOfDay.coerceAtLeast(0L)
             }
@@ -598,18 +628,20 @@ fun buildCalendarData(
             val shortfall = (targetThatDay - deposit).coerceAtLeast(0L)
 
             val status = when {
+                // ✅ Kalau target 0 (hutang sudah lunas) → tidak dihitung sebagai empty
+                targetThatDay == 0L && deposit == 0L -> DayStatus.FULL
                 deposit == 0L -> DayStatus.EMPTY
                 deposit >= targetThatDay -> DayStatus.FULL
                 else -> DayStatus.PARTIAL
             }
 
             result.add(DayData(
-                date = dayCal,
-                status = status,
-                totalDeposit = deposit,
+                date          = dayCal,
+                status        = status,
+                totalDeposit  = deposit,
                 targetThatDay = targetThatDay,
-                shortfall = shortfall,
-                isDeadline = isDeadline
+                shortfall     = shortfall,
+                isDeadline    = isDeadline
             ))
         }
     }

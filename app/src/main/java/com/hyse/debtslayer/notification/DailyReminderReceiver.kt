@@ -106,6 +106,14 @@ class DailyReminderReceiver : BroadcastReceiver() {
                 val targetStr = "Rp ${numFormatter.format(dailyTarget)}"
                 val depositStr = "Rp ${numFormatter.format(todayDeposit)}"
 
+                val yesterdayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                    .format(Date(System.currentTimeMillis() - 86_400_000L))
+                val yesterdayDeposit = transactions.filter { tx ->
+                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(tx.date)) == yesterdayStr
+                }.sumOf { it.amount }
+
+                val twoDaysNoDeposit = todayDeposit == 0L && yesterdayDeposit == 0L
+
                 val (title, body) = when {
                     daysLeft <= 3L && todayDeposit < dailyTarget ->
                         "🚨 KRITIS! Tinggal $daysLeft hari!" to
@@ -114,6 +122,10 @@ class DailyReminderReceiver : BroadcastReceiver() {
                     daysLeft <= 7L && todayDeposit == 0L ->
                         "⚠️ URGENT! Mai di sini." to
                                 "Tinggal $daysLeft hari! Target hari ini $targetStr. Belum setor sama sekali!"
+
+                    // ✅ BARU: 2 hari tidak setor → Mai komentar khusus
+                    twoDaysNoDeposit ->
+                        getTwoDaysMissingNotification(dailyTarget, daysLeft, numFormatter, mode)
 
                     todayDeposit == 0L ->
                         "📢 Reminder dari Mai" to
@@ -199,6 +211,34 @@ class DailyReminderReceiver : BroadcastReceiver() {
                 "Pelan-pelan saja, target hari ini $targetStr. Kamu hebat! ✨"
             ).random()
         }
+    }
+
+    private fun getTwoDaysMissingNotification(
+        target: Long,
+        daysLeft: Long,
+        fmt: NumberFormat,
+        mode: com.hyse.debtslayer.personality.AdaptiveMaiPersonality.PersonalityMode
+    ): Pair<String, String> {
+        val targetStr = "Rp ${fmt.format(target)}"
+        val title = "😤 2 Hari Tidak Setor!"
+        val body = when (mode) {
+            com.hyse.debtslayer.personality.AdaptiveMaiPersonality.PersonalityMode.STRICT -> listOf(
+                "Dua hari tidak setor sama sekali. Apa yang kamu lakukan? Target hari ini $targetStr.",
+                "Kemarin tidak setor, hari ini juga belum. Ini bukan liburan. Setor $targetStr sekarang.",
+                "Dua hari kosong. Hutangmu tidak ikut libur. Setor $targetStr — jangan tunda lagi."
+            ).random()
+            com.hyse.debtslayer.personality.AdaptiveMaiPersonality.PersonalityMode.BALANCED -> listOf(
+                "Dua hari tidak ada setoran nih. Ayo balik ke jalur! Target hari ini $targetStr.",
+                "Kemarin libur, hari ini jangan ikut libur juga. Setor $targetStr ya.",
+                "Sudah 2 hari tidak setor. Tinggal $daysLeft hari lagi — jangan sampai ketinggalan terus."
+            ).random()
+            com.hyse.debtslayer.personality.AdaptiveMaiPersonality.PersonalityMode.GENTLE -> listOf(
+                "Hai, sudah 2 hari tidak setor nih. Tidak apa-apa, tapi yuk mulai lagi! Target $targetStr 😊",
+                "Dua hari istirahat cukup ya. Sekarang saatnya balik setor $targetStr, semangat! 💪",
+                "Aku perhatiin kamu belum setor 2 hari. Tidak kenapa-kenapa, tapi $targetStr hari ini bisa kan? ✨"
+            ).random()
+        }
+        return title to body
     }
 
     private fun showNotification(context: Context, title: String, body: String) {

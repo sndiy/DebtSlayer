@@ -24,19 +24,20 @@ import com.hyse.debtslayer.viewmodel.AuthViewModel
 fun LoginScreen(
     authViewModel: AuthViewModel,
     onLoginSuccess: () -> Unit,
+    onSignUpSuccess: () -> Unit = onLoginSuccess, // ✅ callback khusus registrasi
     onBack: () -> Unit,
     onContinueAsGuest: (() -> Unit)? = null
 ) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var nickname by remember { mutableStateOf("") }
+    var email          by remember { mutableStateOf("") }
+    var password       by remember { mutableStateOf("") }
+    var nickname       by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var isSignUp by remember { mutableStateOf(false) }
-    var showReset by remember { mutableStateOf(false) }
+    var isSignUp       by remember { mutableStateOf(false) }
+    var showReset      by remember { mutableStateOf(false) }
+    var justRegistered by remember { mutableStateOf(false) } // ✅ flag daftar
 
     val authState by authViewModel.authState.collectAsState()
 
-    // Back handler hanya aktif kalau bukan screen awal
     if (onContinueAsGuest == null) {
         BackHandler { onBack() }
     }
@@ -44,7 +45,12 @@ fun LoginScreen(
     LaunchedEffect(authState) {
         if (authState is AuthState.Success) {
             authViewModel.clearState()
-            onLoginSuccess()
+            if (justRegistered) {
+                justRegistered = false
+                onSignUpSuccess() // ✅ ke onboarding
+            } else {
+                onLoginSuccess()  // ✅ ke checking cloud / main
+            }
         }
     }
 
@@ -61,8 +67,7 @@ fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-
-            // ── Tombol back (hanya kalau bukan screen awal) ───────
+            // ── Tombol back ───────────────────────────────────────
             if (onContinueAsGuest == null) {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     IconButton(onClick = onBack) {
@@ -105,10 +110,10 @@ fun LoginScreen(
 
             Text(
                 when {
-                    showReset             -> "Link reset akan dikirim ke email kamu"
-                    isSignUp              -> "Daftar untuk sync data hutang ke cloud"
+                    showReset -> "Link reset akan dikirim ke email kamu"
+                    isSignUp  -> "Daftar untuk sync data hutang ke cloud"
                     onContinueAsGuest != null -> "Login atau daftar untuk mulai"
-                    else                  -> "Sinkronkan data hutang ke cloud"
+                    else      -> "Sinkronkan data hutang ke cloud"
                 },
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -123,10 +128,8 @@ fun LoginScreen(
                     onValueChange = { nickname = it },
                     label = { Text("Nickname") },
                     leadingIcon = {
-                        Icon(
-                            Icons.Default.Badge, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icon(Icons.Default.Badge, null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
                     placeholder = { Text("Nama panggilanmu") },
                     modifier = Modifier.fillMaxWidth(),
@@ -144,10 +147,8 @@ fun LoginScreen(
                 onValueChange = { email = it },
                 label = { Text("Email") },
                 leadingIcon = {
-                    Icon(
-                        Icons.Default.Email, null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Icon(Icons.Default.Email, null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 modifier = Modifier.fillMaxWidth(),
@@ -158,22 +159,18 @@ fun LoginScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // ── Password (sembunyikan saat reset) ─────────────────
+            // ── Password ──────────────────────────────────────────
             if (!showReset) {
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
                     leadingIcon = {
-                        Icon(
-                            Icons.Default.Lock, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icon(Icons.Default.Lock, null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
                     visualTransformation = if (passwordVisible)
-                        VisualTransformation.None
-                    else
-                        PasswordVisualTransformation(),
+                        VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Icon(
@@ -234,70 +231,159 @@ fun LoginScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            // ── Tombol Aksi ───────────────────────────────────────
-            Button(
-                onClick = {
-                    authViewModel.clearState()
-                    when {
-                        showReset -> authViewModel.resetPassword(email)
-                        isSignUp  -> authViewModel.signUp(email, password, nickname)
-                        else      -> authViewModel.signIn(email, password)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                enabled = authState !is AuthState.Loading &&
-                        email.isNotBlank() &&
-                        (showReset || password.isNotBlank()) &&
-                        (!isSignUp || nickname.isNotBlank()),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            ) {
-                if (authState is AuthState.Loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text(
-                        when {
-                            showReset -> "Kirim Email Reset"
-                            isSignUp  -> "Daftar"
-                            else      -> "Masuk"
-                        },
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
+            // ══════════════════════════════════════════════════════
+            // ✅ TOMBOL DIPISAH: Login dan Daftar tidak lagi toggle
+            // ══════════════════════════════════════════════════════
 
-            Spacer(Modifier.height(12.dp))
-
-            // ── Toggle Sign In / Sign Up ──────────────────────────
             if (!showReset) {
-                TextButton(onClick = {
-                    isSignUp = !isSignUp
-                    nickname = ""
-                    email = ""
-                    password = ""
-                    authViewModel.clearState()
-                }) {
-                    Text(
-                        if (isSignUp) "Sudah punya akun? Masuk"
-                        else "Belum punya akun? Daftar",
-                        color = MaterialTheme.colorScheme.primary
+                if (!isSignUp) {
+                    // ── Mode Login: tampilkan tombol Masuk + Daftar ──
+                    Button(
+                        onClick = {
+                            authViewModel.clearState()
+                            authViewModel.signIn(email, password)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = authState !is AuthState.Loading &&
+                                email.isNotBlank() && password.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor   = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        if (authState is AuthState.Loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Login, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Masuk", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // ✅ Tombol Daftar — terpisah, selalu terlihat di mode login
+                    OutlinedButton(
+                        onClick = {
+                            isSignUp = true
+                            email = ""; password = ""; nickname = ""
+                            authViewModel.clearState()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = authState !is AuthState.Loading,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Buat Akun Baru", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                } else {
+                    // ── Mode Daftar: tampilkan tombol Daftar + Kembali ke Login ──
+                    Button(
+                        onClick = {
+                            authViewModel.clearState()
+                            justRegistered = true  // ✅ tandai ini registrasi
+                            authViewModel.signUp(email, password, nickname)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = authState !is AuthState.Loading &&
+                                email.isNotBlank() &&
+                                password.isNotBlank() &&
+                                nickname.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor   = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        if (authState is AuthState.Loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Daftar", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    TextButton(
+                        onClick = {
+                            isSignUp = false
+                            email = ""; password = ""; nickname = ""
+                            authViewModel.clearState()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack, null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Sudah punya akun? Masuk",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                // ── Mode Reset Password ───────────────────────────
+                Button(
+                    onClick = {
+                        authViewModel.clearState()
+                        authViewModel.resetPassword(email)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = authState !is AuthState.Loading && email.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor   = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                ) {
+                    if (authState is AuthState.Loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Kirim Email Reset", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
-            // ── Lupa Password ─────────────────────────────────────
+            Spacer(Modifier.height(8.dp))
+
+            // ── Lupa Password (hanya di mode login) ───────────────
             if (!isSignUp) {
                 TextButton(onClick = {
                     showReset = !showReset
@@ -312,17 +398,14 @@ fun LoginScreen(
                 }
             }
 
-            // ── Tombol Guest (hanya di screen awal) ───────────────
+            // ── Tombol Guest (hanya di screen awal, mode login) ───
             if (onContinueAsGuest != null && !isSignUp && !showReset) {
                 Spacer(Modifier.height(8.dp))
-
                 HorizontalDivider(
                     modifier = Modifier.padding(vertical = 4.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
-
                 Spacer(Modifier.height(8.dp))
-
                 OutlinedButton(
                     onClick = onContinueAsGuest,
                     modifier = Modifier
@@ -333,33 +416,22 @@ fun LoginScreen(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 ) {
-                    Icon(
-                        Icons.Default.PersonOutline,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Icon(Icons.Default.PersonOutline, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Lanjut sebagai Guest",
-                        fontSize = 14.sp
-                    )
+                    Text("Lanjut sebagai Guest", fontSize = 14.sp)
                 }
-
                 Spacer(Modifier.height(8.dp))
-
                 Text(
                     "Data guest tidak tersinkron ke cloud",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
-
                 Spacer(Modifier.height(16.dp))
             }
         }
     }
 }
 
-// ── Helper warna TextField ────────────────────────────────────────────────────
 @Composable
 private fun outlinedTextFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor             = MaterialTheme.colorScheme.onSurface,

@@ -930,7 +930,14 @@ AI normal kembali besok jam 07:00 WIB.
 
     private fun addSystemMessage(text: String) = addAiMessage(text)
 
-    fun getAllTransactions(): List<Transaction> = _transactions.value
+    fun applySetupDate(date: String) {
+        viewModelScope.launch {
+            _setupDate.value = date
+            withContext(Dispatchers.IO) {
+                preferencesRepository.saveSetupDate(date)
+            }
+        }
+    }
 
     fun updateDeadlineFromSettings(newDeadline: String) {
         viewModelScope.launch {
@@ -966,6 +973,7 @@ AI normal kembali besok jam 07:00 WIB.
 
     fun completeOnboarding(totalDebt: Long, deadline: String) {
         viewModelScope.launch {
+            delay(100) // ✅ Beri waktu HomeScreen render LoadingScreen dan subscribe isDataReady
             _isDataReady.value = false
             _pendingFirstSetupGreeting.value = true
             _loadingStep.value = 0

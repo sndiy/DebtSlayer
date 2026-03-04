@@ -46,6 +46,7 @@ fun AccountScreen(
     val transactions by viewModel.transactions.collectAsState()
     val totalDebt by viewModel.totalDebt.collectAsState()
     val customDeadline by viewModel.customDeadline.collectAsState()
+    val setupDate by viewModel.setupDate.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -325,7 +326,8 @@ fun AccountScreen(
                                         // ✅ Kirim totalDebt & deadline sekaligus
                                         val result = syncRepo.uploadAll(
                                             totalDebt = totalDebt,
-                                            deadline  = customDeadline
+                                            deadline  = customDeadline,
+                                            setupDate = setupDate                // ✅
                                         )
                                         syncPrefs.updateLastSync()
                                         syncMessage = result.uploadSummary()

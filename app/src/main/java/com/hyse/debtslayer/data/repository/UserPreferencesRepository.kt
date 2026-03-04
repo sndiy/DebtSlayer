@@ -140,9 +140,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun saveSetupDate(date: String) {
         context.dataStore.edit { preferences ->
-            if (preferences[SETUP_DATE_KEY] == null) {
-                preferences[SETUP_DATE_KEY] = date
-            }
+            preferences[SETUP_DATE_KEY] = date
         }
     }
 

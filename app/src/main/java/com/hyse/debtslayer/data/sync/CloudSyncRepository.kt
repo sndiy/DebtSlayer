@@ -16,26 +16,35 @@ class CloudSyncRepository(
     private val uid get() = authRepository.currentUid
         ?: throw IllegalStateException("User belum login")
 
-    // ── Checksum per transaksi ────────────────────────────────────
     private fun Transaction.checksum(): String =
         "${id}_${amount}_${source}_${date}".hashCode().toString()
 
-    // ── Upload SEMUA — transaksi + preferences ────────────────────
+    // ── Upload SEMUA — transaksi + semua preferences ──────────────
     suspend fun uploadAll(
         totalDebt: Long? = null,
-        deadline: String? = null
+        deadline: String? = null,
+        personalityMode: String? = null,
+        reminderHour: Int? = null,
+        reminderMinute: Int? = null,
+        setupDate: String? = null
     ): SyncResult {
         val transactions = transactionRepository.allTransactions.firstOrNull()
             ?: return SyncResult(0, 0)
 
-        // ── 1. Upload preferences kalau ada ──────────────────────
-        if (totalDebt != null && totalDebt > 0 && deadline != null) {
+        // ── 1. Upload preferences ─────────────────────────────────
+        val prefsMap = mutableMapOf<String, Any>()
+        if (totalDebt != null && totalDebt > 0) prefsMap["totalDebt"]       = totalDebt
+        if (!deadline.isNullOrBlank())          prefsMap["deadline"]        = deadline
+        if (!personalityMode.isNullOrBlank())   prefsMap["personalityMode"] = personalityMode
+        if (reminderHour != null)               prefsMap["reminderHour"]    = reminderHour
+        if (reminderMinute != null)             prefsMap["reminderMinute"]  = reminderMinute
+        if (!setupDate.isNullOrBlank())         prefsMap["setupDate"]       = setupDate
+
+        val prefsUploaded = prefsMap.isNotEmpty()
+        if (prefsUploaded) {
+            prefsMap["updatedAt"] = System.currentTimeMillis()
             firestore.collection("users").document(uid)
-                .set(mapOf(
-                    "totalDebt" to totalDebt,
-                    "deadline"  to deadline,
-                    "updatedAt" to System.currentTimeMillis()
-                ), SetOptions.merge()).await()
+                .set(prefsMap, SetOptions.merge()).await()
         }
 
         // ── 2. Upload transaksi yang berubah saja ─────────────────
@@ -51,9 +60,9 @@ class CloudSyncRepository(
         }
 
         if (changed.isEmpty()) return SyncResult(
-            total = transactions.size,
-            uploaded = 0,
-            prefsUploaded = totalDebt != null
+            total         = transactions.size,
+            uploaded      = 0,
+            prefsUploaded = prefsUploaded
         )
 
         val batch = firestore.batch()
@@ -76,9 +85,9 @@ class CloudSyncRepository(
         metaRef.set(newChecksums, SetOptions.merge()).await()
 
         return SyncResult(
-            total          = transactions.size,
-            uploaded       = changed.size,
-            prefsUploaded  = totalDebt != null
+            total         = transactions.size,
+            uploaded      = changed.size,
+            prefsUploaded = prefsUploaded
         )
     }
 
@@ -95,15 +104,19 @@ class CloudSyncRepository(
         } catch (e: Exception) { /* abaikan */ }
     }
 
-    // ── Download transaksi + preferences ─────────────────────────
+    // ── Download transaksi + semua preferences ────────────────────
     suspend fun downloadAll(): DownloadResult {
-        // ── 1. Download preferences (totalDebt, deadline) ─────────
+        // ── 1. Download preferences ───────────────────────────────
         val prefsDoc = try {
             firestore.collection("users").document(uid).get().await()
         } catch (e: Exception) { null }
 
-        val cloudTotalDebt = prefsDoc?.getLong("totalDebt")
-        val cloudDeadline  = prefsDoc?.getString("deadline")
+        val cloudTotalDebt      = prefsDoc?.getLong("totalDebt")
+        val cloudDeadline       = prefsDoc?.getString("deadline")
+        val cloudPersonality    = prefsDoc?.getString("personalityMode")
+        val cloudReminderHour   = prefsDoc?.getLong("reminderHour")?.toInt()
+        val cloudReminderMinute = prefsDoc?.getLong("reminderMinute")?.toInt()
+        val cloudSetupDate      = prefsDoc?.getString("setupDate")
 
         // ── 2. Download transaksi ─────────────────────────────────
         val snapshot = firestore
@@ -148,34 +161,49 @@ class CloudSyncRepository(
         }
 
         return DownloadResult(
-            totalCloud    = snapshot.size(),
-            downloaded    = inserted,
-            updated       = updated,
-            totalDebt     = cloudTotalDebt,
-            deadline      = cloudDeadline
+            totalCloud      = snapshot.size(),
+            downloaded      = inserted,
+            updated         = updated,
+            totalDebt       = cloudTotalDebt,
+            deadline        = cloudDeadline,
+            personalityMode = cloudPersonality,
+            reminderHour    = cloudReminderHour,
+            reminderMinute  = cloudReminderMinute,
+            setupDate       = cloudSetupDate
         )
     }
 
     // ── Cek apakah ada data di cloud ─────────────────────────────
+    // ✅ FIX: Sebelumnya hanya cek transaksi → false untuk akun baru tanpa transaksi.
+    // Sekarang: cek dokumen user EXISTS saja — kalau akun sudah pernah login
+    // dan onboarding selesai, dokumen user pasti ada (dibuat saat uploadAll()).
+    // Kalau dokumen user tidak ada → benar-benar akun baru, belum onboarding.
     suspend fun hasCloudData(): Boolean {
         return try {
-            // Cek transaksi
+            // Cek 1: ada transaksi di cloud?
             val txSnapshot = firestore
                 .collection("users").document(uid)
                 .collection("transactions")
-                .limit(1)
-                .get().await()
+                .limit(1).get().await()
             if (!txSnapshot.isEmpty) return true
 
-            // Cek preferences (totalDebt tersimpan)
+            // Cek 2: dokumen user ada dan punya field totalDebt?
+            // (artinya onboarding sudah pernah selesai dan di-upload)
             val prefsDoc = firestore
                 .collection("users").document(uid)
                 .get().await()
+
+            // ✅ FIX: cukup cek dokumen exists + punya totalDebt.
+            // Kalau totalDebt ada berarti onboarding sudah selesai sebelumnya.
+            // Kalau tidak ada totalDebt → akun baru yang belum onboarding → return false
+            // supaya user diarahkan ke onboarding.
             prefsDoc.exists() && prefsDoc.contains("totalDebt")
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            false
+        }
     }
 
-    // ── Upload preferences saja (tetap ada untuk kompatibilitas) ─
+    // ── Upload preferences saja ───────────────────────────────────
     suspend fun uploadPreferences(totalDebt: Long, deadline: String) {
         firestore.collection("users").document(uid)
             .set(mapOf(
@@ -192,7 +220,7 @@ class CloudSyncRepository(
     }
 }
 
-// ── SyncResult untuk upload ───────────────────────────────────────────────────
+// ── SyncResult ────────────────────────────────────────────────────────────────
 data class SyncResult(
     val total: Int = 0,
     val uploaded: Int = 0,
@@ -203,21 +231,25 @@ data class SyncResult(
         uploaded == 0 && !prefsUploaded ->
             "✅ Semua data sudah sinkron, tidak ada yang perlu diupload."
         uploaded == 0 && prefsUploaded ->
-            "✅ Pengaturan hutang berhasil diupload."
+            "✅ Pengaturan berhasil diupload."
         uploaded == total ->
-            "✅ Upload berhasil! $uploaded transaksi + pengaturan hutang diunggah."
+            "✅ Upload berhasil! $uploaded transaksi + pengaturan diunggah."
         else ->
-            "✅ Upload berhasil! $uploaded dari $total transaksi + pengaturan hutang diperbarui."
+            "✅ Upload berhasil! $uploaded dari $total transaksi + pengaturan diperbarui."
     }
 }
 
-// ── DownloadResult — bawa juga totalDebt & deadline dari cloud ───────────────
+// ── DownloadResult ────────────────────────────────────────────────────────────
 data class DownloadResult(
     val totalCloud: Int = 0,
     val downloaded: Int = 0,
     val updated: Int = 0,
-    val totalDebt: Long? = null,      // ✅ dari Firestore
-    val deadline: String? = null       // ✅ dari Firestore
+    val totalDebt: Long? = null,
+    val deadline: String? = null,
+    val personalityMode: String? = null,
+    val reminderHour: Int? = null,
+    val reminderMinute: Int? = null,
+    val setupDate: String? = null
 ) {
     fun downloadSummary(): String {
         val txInfo = when {
@@ -226,8 +258,8 @@ data class DownloadResult(
             downloaded > 0                  -> "$downloaded transaksi baru ditambahkan."
             else                            -> "$updated transaksi diperbarui."
         }
-        val prefsInfo = if (totalDebt != null && deadline != null)
-            " Pengaturan hutang & deadline berhasil dimuat." else ""
+        val prefsInfo = if (totalDebt != null || personalityMode != null || reminderHour != null)
+            " Pengaturan berhasil dimuat." else ""
         return "✅ $txInfo$prefsInfo"
     }
 }

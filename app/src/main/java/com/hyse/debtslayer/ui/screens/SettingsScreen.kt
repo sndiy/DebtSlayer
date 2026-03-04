@@ -383,19 +383,20 @@ fun CloudSyncContent(
     viewModel: DebtViewModel,
     onShowLogin: () -> Unit
 ) {
-    val currentUser by authViewModel.currentUser.collectAsState()
-    val authState by authViewModel.authState.collectAsState()
-    val transactions by viewModel.transactions.collectAsState()
-    val debtState by viewModel.debtState.collectAsState()
-    val totalDebt by viewModel.totalDebt.collectAsState()
-    val customDeadline by viewModel.customDeadline.collectAsState()
-    val scope = rememberCoroutineScope()
+    val currentUser     by authViewModel.currentUser.collectAsState()
+    val transactions    by viewModel.transactions.collectAsState()
+    val totalDebt       by viewModel.totalDebt.collectAsState()
+    val customDeadline  by viewModel.customDeadline.collectAsState()
+    val personalityMode by viewModel.personalityMode.collectAsState()
+    val reminderHour    by viewModel.reminderHour.collectAsState(initial = 19)
+    val reminderMinute  by viewModel.reminderMinute.collectAsState(initial = 0)
+    val setupDate       by viewModel.setupDate.collectAsState()
+    val scope           = rememberCoroutineScope()
 
     var syncStatus by remember { mutableStateOf("") }
-    var isSyncing by remember { mutableStateOf(false) }
+    var isSyncing  by remember { mutableStateOf(false) }
 
     if (currentUser == null) {
-        // ── Belum login ───────────────────────────────────────────
         Text(
             "Login untuk menyinkronkan data hutang kamu ke cloud. Data aman dan bisa diakses dari mana saja.",
             style = MaterialTheme.typography.bodySmall,
@@ -411,152 +412,171 @@ fun CloudSyncContent(
             Spacer(Modifier.width(8.dp))
             Text("Login / Daftar Akun")
         }
-    } else {
-        // ── Sudah login ───────────────────────────────────────────
+        return
+    }
+
+    // ── Info akun ─────────────────────────────────────────────────
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF6200EE).copy(alpha = 0.08f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Default.AccountCircle, null,
+                tint = Color(0xFF6200EE),
+                modifier = Modifier.size(32.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Login sebagai:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                Text(
+                    currentUser?.email ?: "-",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF6200EE)
+                )
+            }
+            Icon(
+                Icons.Default.CheckCircle, null,
+                tint = Color(0xFF00897B),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    // ── Tombol Upload ─────────────────────────────────────────────
+    OutlinedButton(
+        onClick = {
+            scope.launch {
+                isSyncing = true
+                syncStatus = ""
+                try {
+                    val syncRepo = CloudSyncRepository(
+                        authRepository = com.hyse.debtslayer.data.auth.AuthRepository(),
+                        transactionRepository = viewModel.getTransactionRepository()
+                    )
+                    // ✅ Kirim semua preferences sekaligus
+                    val result = syncRepo.uploadAll(
+                        totalDebt       = totalDebt,
+                        deadline        = customDeadline,
+                        personalityMode = personalityMode.name,
+                        reminderHour    = reminderHour,
+                        reminderMinute  = reminderMinute,
+                        setupDate       = setupDate          // ✅
+                    )
+                    syncStatus = result.uploadSummary()
+                } catch (e: Exception) {
+                    syncStatus = "❌ Upload gagal: ${e.message?.take(60)}"
+                } finally {
+                    isSyncing = false
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !isSyncing
+    ) {
+        Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Upload ke Cloud")
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // ── Tombol Download ───────────────────────────────────────────
+    OutlinedButton(
+        onClick = {
+            scope.launch {
+                isSyncing = true
+                syncStatus = ""
+                try {
+                    val syncRepo = CloudSyncRepository(
+                        authRepository = com.hyse.debtslayer.data.auth.AuthRepository(),
+                        transactionRepository = viewModel.getTransactionRepository()
+                    )
+                    val result = syncRepo.downloadAll()
+
+                    // ✅ Apply semua preferences dari cloud
+                    if (result.totalDebt != null && result.totalDebt > 0) {
+                        viewModel.updateTotalDebtFromSettings(result.totalDebt)
+                    }
+                    if (!result.deadline.isNullOrBlank()) {
+                        viewModel.updateDeadlineFromSettings(result.deadline)
+                    }
+                    if (!result.personalityMode.isNullOrBlank()) {
+                        try {
+                            val mode = com.hyse.debtslayer.personality.AdaptiveMaiPersonality
+                                .PersonalityMode.valueOf(result.personalityMode)
+                            viewModel.setPersonalityMode(mode)
+                        } catch (e: Exception) { /* mode tidak dikenal → skip */ }
+                    }
+                    if (result.reminderHour != null && result.reminderMinute != null) {
+                        viewModel.saveReminderTime(result.reminderHour, result.reminderMinute)
+                    }
+
+                    syncStatus = result.downloadSummary()
+                } catch (e: Exception) {
+                    syncStatus = "❌ Download gagal: ${e.message?.take(60)}"
+                } finally {
+                    isSyncing = false
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !isSyncing
+    ) {
+        Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Download dari Cloud")
+    }
+
+    if (isSyncing) {
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
+
+    if (syncStatus.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        val isSuccess = syncStatus.startsWith("✅")
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF6200EE).copy(alpha = 0.08f)
+                containerColor = if (isSuccess) Color(0xFF00897B).copy(alpha = 0.1f)
+                else MaterialTheme.colorScheme.errorContainer
             ),
             shape = RoundedCornerShape(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    Icons.Default.AccountCircle,
-                    null,
-                    tint = Color(0xFF6200EE),
-                    modifier = Modifier.size(32.dp)
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Login sebagai:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Text(
-                        currentUser?.email ?: "-",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF6200EE)
-                    )
-                }
-                Icon(
-                    Icons.Default.CheckCircle,
-                    null,
-                    tint = Color(0xFF00897B),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Text(
+                syncStatus,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isSuccess) Color(0xFF00897B)
+                else MaterialTheme.colorScheme.onErrorContainer
+            )
         }
-        Spacer(Modifier.height(12.dp))
+    }
 
-        // Tombol Upload
-        OutlinedButton(
-            onClick = {
-                scope.launch {
-                    isSyncing = true
-                    syncStatus = ""
-                    try {
-                        val syncRepo = CloudSyncRepository(
-                            authRepository = com.hyse.debtslayer.data.auth.AuthRepository(),
-                            transactionRepository = viewModel.getTransactionRepository()
-                        )
-                        syncRepo.uploadAll()
-                        if (customDeadline != null) {
-                            syncRepo.uploadPreferences(totalDebt, customDeadline!!)
-                        }
-                        syncStatus = "✅ Upload berhasil! ${transactions.size} transaksi tersimpan di cloud."
-                    } catch (e: Exception) {
-                        syncStatus = "❌ Upload gagal: ${e.message?.take(60)}"
-                    } finally {
-                        isSyncing = false
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSyncing
-        ) {
-            Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Upload ke Cloud")
-        }
+    Spacer(Modifier.height(12.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
 
-        Spacer(Modifier.height(8.dp))
-
-        // Tombol Download
-        OutlinedButton(
-            onClick = {
-                scope.launch {
-                    isSyncing = true
-                    syncStatus = ""
-                    try {
-                        val syncRepo = CloudSyncRepository(
-                            authRepository = com.hyse.debtslayer.data.auth.AuthRepository(),
-                            transactionRepository = viewModel.getTransactionRepository()
-                        )
-                        syncRepo.downloadAll()
-                        syncStatus = "✅ Download berhasil! Data diperbarui dari cloud."
-                    } catch (e: Exception) {
-                        syncStatus = "❌ Download gagal: ${e.message?.take(60)}"
-                    } finally {
-                        isSyncing = false
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSyncing
-        ) {
-            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Download dari Cloud")
-        }
-
-        if (isSyncing) {
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-
-        if (syncStatus.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            val isSuccess = syncStatus.startsWith("✅")
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isSuccess)
-                        Color(0xFF00897B).copy(alpha = 0.1f)
-                    else
-                        MaterialTheme.colorScheme.errorContainer
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(
-                    syncStatus,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isSuccess) Color(0xFF00897B)
-                    else MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(12.dp))
-
-        // Tombol Logout
-        TextButton(
-            onClick = { authViewModel.signOut() },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Default.Logout, null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Logout")
-        }
+    TextButton(
+        onClick = { authViewModel.signOut() },
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+    ) {
+        Icon(Icons.Default.Logout, null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Logout")
     }
 }
 
