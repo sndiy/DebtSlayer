@@ -1047,6 +1047,31 @@ AI normal kembali besok jam 07:00 WIB.
         }
     }
 
+    /**
+     * Dipanggil setelah download cloud selesai.
+     * Reload semua transaksi dari Room dan recalculate state hutang
+     * supaya UI langsung sinkron tanpa perlu restart app.
+     */
+    fun reloadAfterSync() {
+        viewModelScope.launch {
+            try {
+                val freshTransactions = withContext(Dispatchers.IO) {
+                    repository.allTransactions.firstOrNull() ?: emptyList()
+                }
+                _transactions.value = freshTransactions
+                recalculateDebtState(
+                    transactions      = freshTransactions,
+                    deadlineOverride  = _customDeadline.value,
+                    totalDebtOverride = _totalDebt.value
+                )
+                rebuildChatModel()
+                Log.d(TAG, "reloadAfterSync: ${freshTransactions.size} transactions loaded")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in reloadAfterSync: ${e.message}")
+            }
+        }
+    }
+
     fun saveReminderTime(hour: Int, minute: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             preferencesRepository.saveReminderTime(hour, minute)

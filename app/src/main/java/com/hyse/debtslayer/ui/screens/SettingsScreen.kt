@@ -494,6 +494,7 @@ fun CloudSyncContent(
     Spacer(Modifier.height(8.dp))
 
     // ── Tombol Download ───────────────────────────────────────────
+    // Tombol Download
     OutlinedButton(
         onClick = {
             scope.launch {
@@ -518,11 +519,18 @@ fun CloudSyncContent(
                             val mode = com.hyse.debtslayer.personality.AdaptiveMaiPersonality
                                 .PersonalityMode.valueOf(result.personalityMode)
                             viewModel.setPersonalityMode(mode)
-                        } catch (e: Exception) { /* mode tidak dikenal → skip */ }
+                        } catch (e: Exception) { /* skip */ }
                     }
                     if (result.reminderHour != null && result.reminderMinute != null) {
                         viewModel.saveReminderTime(result.reminderHour, result.reminderMinute)
                     }
+                    if (!result.setupDate.isNullOrBlank()) {
+                        viewModel.applySetupDate(result.setupDate)
+                    }
+
+                    // ✅ Trigger full resync ViewModel supaya semua data fresh
+                    // sebelum app bisa dipakai — terutama setelah ada transaksi yang dihapus
+                    viewModel.reloadAfterSync()
 
                     syncStatus = result.downloadSummary()
                 } catch (e: Exception) {

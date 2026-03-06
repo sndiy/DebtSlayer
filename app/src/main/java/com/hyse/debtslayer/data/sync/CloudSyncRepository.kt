@@ -124,10 +124,12 @@ class CloudSyncRepository(
             .collection("transactions")
             .get().await()
 
-        val localMap = transactionRepository.allTransactions
-            .firstOrNull()
-            ?.associateBy { it.id }
-            ?: emptyMap()
+        val localList = transactionRepository.allTransactions
+            .firstOrNull() ?: emptyList()
+        val localMap = localList.associateBy { it.id }
+
+        // ✅ Kumpulkan semua ID yang ada di cloud
+        val cloudIds = mutableSetOf<Long>()
 
         var inserted = 0
         var updated  = 0
@@ -142,6 +144,7 @@ class CloudSyncRepository(
                 )
 
                 if (cloudTx.amount <= 0) return@forEach
+                cloudIds.add(cloudTx.id)
 
                 val localTx = localMap[cloudTx.id]
                 when {
@@ -160,10 +163,35 @@ class CloudSyncRepository(
             }
         }
 
+        // ✅ Hapus transaksi lokal yang TIDAK ADA di cloud
+        // (artinya sudah dihapus dari cloud sebelumnya)
+        var deleted = 0
+        localList.forEach { localTx ->
+            if (localTx.id !in cloudIds) {
+                transactionRepository.deleteTransaction(localTx.id)
+                deleted++
+            }
+        }
+
+        // ✅ Sync ulang checksums biar upload berikutnya tidak re-upload yang sudah ada
+        if (deleted > 0 || inserted > 0 || updated > 0) {
+            try {
+                val metaRef = firestore
+                    .collection("users").document(uid)
+                    .collection("_meta").document("checksums")
+                val remainingLocal = transactionRepository.allTransactions.firstOrNull() ?: emptyList()
+                val newChecksums = remainingLocal.associate { tx ->
+                    tx.id.toString() to "${tx.id}_${tx.amount}_${tx.source}_${tx.date}".hashCode().toString()
+                }
+                metaRef.set(newChecksums, SetOptions.merge()).await()
+            } catch (e: Exception) { /* abaikan, tidak kritis */ }
+        }
+
         return DownloadResult(
             totalCloud      = snapshot.size(),
             downloaded      = inserted,
             updated         = updated,
+            deleted         = deleted,            // ✅ baru
             totalDebt       = cloudTotalDebt,
             deadline        = cloudDeadline,
             personalityMode = cloudPersonality,
@@ -244,6 +272,7 @@ data class DownloadResult(
     val totalCloud: Int = 0,
     val downloaded: Int = 0,
     val updated: Int = 0,
+    val deleted: Int = 0,               // ✅ baru
     val totalDebt: Long? = null,
     val deadline: String? = null,
     val personalityMode: String? = null,
@@ -252,12 +281,11 @@ data class DownloadResult(
     val setupDate: String? = null
 ) {
     fun downloadSummary(): String {
-        val txInfo = when {
-            downloaded == 0 && updated == 0 -> "Transaksi sudah sinkron."
-            downloaded > 0 && updated > 0   -> "$downloaded transaksi baru, $updated diperbarui."
-            downloaded > 0                  -> "$downloaded transaksi baru ditambahkan."
-            else                            -> "$updated transaksi diperbarui."
-        }
+        val parts = mutableListOf<String>()
+        if (downloaded > 0) parts.add("$downloaded transaksi baru")
+        if (updated > 0)    parts.add("$updated diperbarui")
+        if (deleted > 0)    parts.add("$deleted dihapus")
+        val txInfo = if (parts.isEmpty()) "Transaksi sudah sinkron." else "${parts.joinToString(", ")}."
         val prefsInfo = if (totalDebt != null || personalityMode != null || reminderHour != null)
             " Pengaturan berhasil dimuat." else ""
         return "✅ $txInfo$prefsInfo"
