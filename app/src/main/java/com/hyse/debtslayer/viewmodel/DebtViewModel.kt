@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -103,7 +104,8 @@ class DebtViewModel(
     val transactions: StateFlow<List<Transaction>> = _transactions.asStateFlow()
 
     private val _personalityMode = MutableStateFlow(AdaptiveMaiPersonality.PersonalityMode.BALANCED)
-    val personalityMode: StateFlow<AdaptiveMaiPersonality.PersonalityMode> = _personalityMode.asStateFlow()
+    val personalityMode: StateFlow<AdaptiveMaiPersonality.PersonalityMode> =
+        _personalityMode.asStateFlow()
 
     private val _positiveFeedbackCount = MutableStateFlow(0)
     val positiveFeedbackCount: StateFlow<Int> = _positiveFeedbackCount.asStateFlow()
@@ -139,13 +141,22 @@ class DebtViewModel(
     private val _streakData = MutableStateFlow(com.hyse.debtslayer.utils.StreakData())
     val streakData: StateFlow<com.hyse.debtslayer.utils.StreakData> = _streakData.asStateFlow()
 
-    private val _achievements = MutableStateFlow<List<com.hyse.debtslayer.utils.Achievement>>(emptyList())
-    val achievements: StateFlow<List<com.hyse.debtslayer.utils.Achievement>> = _achievements.asStateFlow()
+    private val _achievements =
+        MutableStateFlow<List<com.hyse.debtslayer.utils.Achievement>>(emptyList())
+    val achievements: StateFlow<List<com.hyse.debtslayer.utils.Achievement>> =
+        _achievements.asStateFlow()
 
-    private val _newlyUnlockedAchievement = MutableStateFlow<com.hyse.debtslayer.utils.Achievement?>(null)
-    val newlyUnlockedAchievement: StateFlow<com.hyse.debtslayer.utils.Achievement?> = _newlyUnlockedAchievement.asStateFlow()
+    private val _newlyUnlockedAchievement =
+        MutableStateFlow<com.hyse.debtslayer.utils.Achievement?>(null)
+    val newlyUnlockedAchievement: StateFlow<com.hyse.debtslayer.utils.Achievement?> =
+        _newlyUnlockedAchievement.asStateFlow()
 
     val unlockedAchievements: Flow<Set<String>> = preferencesRepository.unlockedAchievements
+
+    // ── Mai Memory ───────────────────────────────────────────────────────
+    private val _maiMemory = MutableStateFlow(com.hyse.debtslayer.data.preferences.MaiMemory())
+    val maiMemory: StateFlow<com.hyse.debtslayer.data.preferences.MaiMemory> =
+        _maiMemory.asStateFlow()
 
     private val _setupDate = MutableStateFlow<String?>(null)
     val setupDate: StateFlow<String?> = _setupDate.asStateFlow()
@@ -217,12 +228,19 @@ class DebtViewModel(
             _loadingStep.value = 6; delay(100)
             _isDataReady.value = true
             checkStreakAndAchievements()
+            rebuildChatModel()
+            fetchNicknameWithRetry()
         }
         viewModelScope.launch {
             repository.allTransactions.collect { transactionList ->
                 _transactions.value = transactionList
                 recalculateDebtState(transactionList)
                 checkStreakAndAchievements()
+                updateMaiMemory(
+                    transactions = transactionList,
+                    progressPct = _debtState.value.progressPercentage,
+                    dailyTarget = _debtState.value.dailyTarget
+                )
             }
         }
     }
@@ -246,7 +264,9 @@ class DebtViewModel(
             chatModel = buildGenerativeModel(MODEL_NAME)
             chatModelFallback = buildGenerativeModel(MODEL_NAME_FALLBACK)
             Log.d(TAG, "AI models initialized: $MODEL_NAME + $MODEL_NAME_FALLBACK")
-        } catch (e: Exception) { Log.e(TAG, "Error creating AI model: ${e.message}") }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating AI model: ${e.message}")
+        }
     }
 
     fun sendFirstSetupGreeting() {
@@ -258,8 +278,11 @@ class DebtViewModel(
 
     fun sendInitialGreeting() {
         viewModelScope.launch {
-            val hasTodayChat = withContext(Dispatchers.IO) { chatMessageRepository.hasTodayMessages() }
-            if (!hasTodayChat) { delay(100); addSystemMessage(buildDynamicGreeting()) }
+            val hasTodayChat =
+                withContext(Dispatchers.IO) { chatMessageRepository.hasTodayMessages() }
+            if (!hasTodayChat) {
+                delay(100); addSystemMessage(buildDynamicGreeting())
+            }
         }
     }
 
@@ -267,31 +290,43 @@ class DebtViewModel(
         val state = _debtState.value
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
         val todayDeposit = _transactions.value
-            .filter { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date(it.date)) == today }
+            .filter {
+                SimpleDateFormat(
+                    "yyyy-MM-dd",
+                    Locale.getDefault()
+                ).format(java.util.Date(it.date)) == today
+            }
             .sumOf { it.amount }
         val targetStr = CurrencyFormatter.format(state.dailyTarget)
         val remainingStr = CurrencyFormatter.format(state.remainingDebt)
         return when {
             state.daysRemaining <= 0 && state.remainingDebt > 0 ->
                 "DEADLINE SUDAH LEWAT. Sisa hutang $remainingStr harus dibayar SEKARANG. Tidak ada alasan."
+
             state.remainingDebt <= 0 -> listOf(
                 "Hutang lunas. Hmm. Tidak kusangka kamu bisa sampai sini — jangan sombong dulu.",
                 "Selesai. Semua lunas. ...Bagus. Jangan bikin hutang baru lagi, dengar tidak?",
                 "Lunas. Aku tidak akan bilang aku bangga, tapi... ya. Kamu berhasil.",
                 "Hutangnya lunas. Rasanya aneh tidak punya yang harus ditagih ke kamu."
             ).random()
+
             _transactions.value.isEmpty() ->
                 "Hai. Aku Sakurajima Mai. Kamu punya hutang $remainingStr yang harus lunas dalam ${state.daysRemaining} hari. " +
                         "Target harian kamu $targetStr. Kalau mau setor, langsung bilang nominalnya dan ketik \"setor\" atau \"nabung\"."
+
             state.daysRemaining <= 7 && state.remainingDebt > 0 ->
                 "Tinggal ${state.daysRemaining} hari. Sisa $remainingStr. Aku tidak mau dengar alasan — setor sekarang."
+
             todayDeposit >= state.dailyTarget && todayDeposit > 0 ->
                 "Kamu sudah setor ${CurrencyFormatter.format(todayDeposit)} hari ini. Lumayan, target tercapai. Sisa hutang $remainingStr."
+
             todayDeposit in 1 until state.dailyTarget ->
                 "Sudah setor ${CurrencyFormatter.format(todayDeposit)} hari ini. " +
                         "Masih kurang ${CurrencyFormatter.format(state.dailyTarget - todayDeposit)} dari target $targetStr."
+
             todayDeposit == 0L ->
                 "Belum setor hari ini. Target $targetStr. Sisa hutang $remainingStr. Jangan nunggu sampai malam."
+
             else -> "Hai. Sisa hutang $remainingStr. Target hari ini $targetStr."
         }
     }
@@ -313,25 +348,51 @@ class DebtViewModel(
         try {
             val savedMode = preferencesRepository.personalityMode.firstOrNull()
             if (savedMode != null) {
-                try { _personalityMode.value = AdaptiveMaiPersonality.PersonalityMode.valueOf(savedMode) }
-                catch (e: IllegalArgumentException) { Log.e(TAG, "Unknown personality mode: $savedMode") }
+                try {
+                    _personalityMode.value =
+                        AdaptiveMaiPersonality.PersonalityMode.valueOf(savedMode)
+                } catch (e: IllegalArgumentException) {
+                    Log.e(TAG, "Unknown personality mode: $savedMode")
+                }
             }
             val savedDeadline = preferencesRepository.customDeadline.firstOrNull()
             if (!savedDeadline.isNullOrBlank()) _customDeadline.value = savedDeadline
-            _positiveFeedbackCount.value = preferencesRepository.positiveFeedbackCount.firstOrNull() ?: 0
-            _negativeFeedbackCount.value = preferencesRepository.negativeFeedbackCount.firstOrNull() ?: 0
+            _positiveFeedbackCount.value =
+                preferencesRepository.positiveFeedbackCount.firstOrNull() ?: 0
+            _negativeFeedbackCount.value =
+                preferencesRepository.negativeFeedbackCount.firstOrNull() ?: 0
             val savedTotalDebt = preferencesRepository.customTotalDebt.firstOrNull()
             if (savedTotalDebt != null && savedTotalDebt > 0) _totalDebt.value = savedTotalDebt
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
             val savedSetupDate = preferencesRepository.setupDate.firstOrNull()
             if (!savedSetupDate.isNullOrBlank()) _setupDate.value = savedSetupDate
-        } catch (e: Exception) { Log.e(TAG, "Error loading preferences: ${e.message}") }
+            val savedMemory = preferencesRepository.maiMemory.firstOrNull()
+            if (savedMemory != null) {
+                // Reset nickname kalau masih berupa email (hasil fallback yang salah)
+                val cleanMemory = if (savedMemory.nickname.contains("@")) {
+                    savedMemory.copy(nickname = "")
+                } else savedMemory
+                _maiMemory.value = cleanMemory
+                if (cleanMemory.nickname != savedMemory.nickname) {
+                    preferencesRepository.saveMaiMemory(cleanMemory)
+                }
+                Log.d(
+                    TAG,
+                    "MaiMemory loaded: nickname=${cleanMemory.nickname}, bestDay=${cleanMemory.bestDayAmount}"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading preferences: ${e.message}")
+        }
     }
 
     private fun cleanupOldData() {
         viewModelScope.launch(Dispatchers.IO) {
-            try { conversationRepository.cleanOldConversations() }
-            catch (e: Exception) { Log.e(TAG, "Error cleanup: ${e.message}") }
+            try {
+                conversationRepository.cleanOldConversations()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleanup: ${e.message}")
+            }
         }
     }
 
@@ -347,20 +408,88 @@ class DebtViewModel(
             val progress = if (activeTotalDebt > 0)
                 (totalPaid.toFloat() / activeTotalDebt * 100f).coerceAtMost(100f) else 0f
             val activeDeadline = deadlineOverride ?: _customDeadline.value ?: getActiveDeadline()
-            val targetDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(activeDeadline)
-            val daysRemaining = (((targetDate?.time ?: 0) - System.currentTimeMillis()) / (1000L * 60 * 60 * 24)).toInt()
+            val targetDate =
+                SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(activeDeadline)
+            val daysRemaining = (((targetDate?.time
+                ?: 0) - System.currentTimeMillis()) / (1000L * 60 * 60 * 24)).toInt()
             val dailyTarget = when {
                 remaining <= 0 -> 0L
                 daysRemaining <= 0 -> remaining
                 else -> CurrencyFormatter.ceilToThousand((remaining + daysRemaining - 1) / daysRemaining)
             }
             _debtState.value = DebtState(
-                totalDebt = activeTotalDebt, totalPaid = totalPaid, remainingDebt = remaining,
-                progressPercentage = progress, daysRemaining = daysRemaining, dailyTarget = dailyTarget
+                totalDebt = activeTotalDebt,
+                totalPaid = totalPaid,
+                remainingDebt = remaining,
+                progressPercentage = progress,
+                daysRemaining = daysRemaining,
+                dailyTarget = dailyTarget
             )
-            if (remaining <= 0L) com.hyse.debtslayer.notification.DailyReminderScheduler.cancel(context)
+            if (remaining <= 0L) com.hyse.debtslayer.notification.DailyReminderScheduler.cancel(
+                context
+            )
             else com.hyse.debtslayer.notification.DailyReminderScheduler.schedule(context)
-        } catch (e: Exception) { Log.e(TAG, "Error in recalculateDebtState: ${e.message}", e) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in recalculateDebtState: ${e.message}", e)
+        }
+    }
+
+    private fun buildMemoryContext(): String {
+        val m = _maiMemory.value
+        Log.d(TAG, "=== MAI MEMORY DEBUG ===")
+        Log.d(TAG, "nickname: '${m.nickname}'")
+        Log.d(TAG, "firstDepositDate: '${m.firstDepositDate}'")
+        Log.d(TAG, "bestDayAmount: ${m.bestDayAmount}")
+        Log.d(TAG, "bestDayDate: '${m.bestDayDate}'")
+        Log.d(TAG, "favoriteDayOfWeek: '${m.favoriteDayOfWeek}'")
+        Log.d(TAG, "daysMetTarget: ${m.daysMetTarget}")
+        Log.d(TAG, "totalDepositDays: ${m.totalDepositDays}")
+        Log.d(TAG, "lastDepositDate: '${m.lastDepositDate}'")
+        Log.d(TAG, "lastDepositAmount: ${m.lastDepositAmount}")
+        Log.d(TAG, "milestone25: ${m.milestone25Reached}, 50: ${m.milestone50Reached}, 75: ${m.milestone75Reached}")
+        Log.d(TAG, "========================")
+        val parts = mutableListOf<String>()
+
+        if (m.nickname.isNotBlank()) {
+            parts.add("Nama panggilan user: ${m.nickname}. Gunakan nama ini sesekali saat merespons.")
+        }
+        if (m.firstDepositDate.isNotBlank()) {
+            parts.add("Pertama kali setor: ${m.firstDepositDate}.")
+        }
+        if (m.bestDayAmount > 0) {
+            parts.add("Setoran terbanyak dalam sehari: ${CurrencyFormatter.format(m.bestDayAmount)} pada ${m.bestDayDate}.")
+        }
+        if (m.favoriteDayOfWeek.isNotBlank()) {
+            parts.add("Hari paling sering setor: ${m.favoriteDayOfWeek}.")
+        }
+        if (m.daysMetTarget > 0) {
+            parts.add("Sudah ${m.daysMetTarget} hari berhasil capai target.")
+        }
+        if (m.totalDepositDays > 0) {
+            parts.add("Total ${m.totalDepositDays} hari aktif setor.")
+        }
+        if (m.lastDepositDate.isNotBlank() && m.lastDepositAmount > 0) {
+            parts.add("Setoran terakhir: ${CurrencyFormatter.format(m.lastDepositAmount)} pada ${m.lastDepositDate}.")
+        }
+        val milestones = buildList {
+            if (m.milestone25Reached) add("25%")
+            if (m.milestone50Reached) add("50%")
+            if (m.milestone75Reached) add("75%")
+        }
+        if (milestones.isNotEmpty()) {
+            parts.add("Milestone yang sudah dicapai: ${milestones.joinToString(", ")}.")
+        }
+
+        if (parts.isEmpty()) return ""
+
+        return """
+        ╔══════════════════════════════════════
+        MEMORI MAI TENTANG USER:
+        ╔══════════════════════════════════════
+        ${parts.joinToString("\n        ")}
+        Gunakan info ini untuk merespons lebih personal. Jangan sebutkan semua sekaligus — pilih yang relevan dengan konteks percakapan.
+        ╔══════════════════════════════════════
+        """.trimIndent()
     }
 
     private fun getSystemInstruction(): String {
@@ -380,15 +509,19 @@ class DebtViewModel(
         • Emoji: maksimal 1, hanya kalau benar-benar perlu
         
         ══════════════════════════════════════
-        MODE SAAT INI: ${when (mode) {
-            AdaptiveMaiPersonality.PersonalityMode.STRICT -> "STRICT — Tegas, tidak ada ampun, kritis"
-            AdaptiveMaiPersonality.PersonalityMode.BALANCED -> "BALANCED — Seimbang antara tegas dan supportif"
-            AdaptiveMaiPersonality.PersonalityMode.GENTLE -> "GENTLE — Lebih lembut, tapi tetap tsundere"
-        }}
+        MODE SAAT INI: ${
+            when (mode) {
+                AdaptiveMaiPersonality.PersonalityMode.STRICT -> "STRICT — Tegas, tidak ada ampun, kritis"
+                AdaptiveMaiPersonality.PersonalityMode.BALANCED -> "BALANCED — Seimbang antara tegas dan supportif"
+                AdaptiveMaiPersonality.PersonalityMode.GENTLE -> "GENTLE — Lebih lembut, tapi tetap tsundere"
+            }
+        }
         ══════════════════════════════════════
         
+        ${buildMemoryContext()}
+
         STATUS HUTANG SAAT INI:
-        • Total hutang   : ${CurrencyFormatter.format(_totalDebt.value)}
+        • Total hutang   : ${'$'}{CurrencyFormatter.format(_totalDebt.value)}
         • Sudah dibayar  : ${CurrencyFormatter.format(state.totalPaid)}
         • Sisa hutang    : ${CurrencyFormatter.format(state.remainingDebt)}
         • Target hari ini: ${CurrencyFormatter.format(state.dailyTarget)}
@@ -477,7 +610,12 @@ class DebtViewModel(
         val state = _debtState.value
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date())
         val todayDeposit = _transactions.value
-            .filter { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(java.util.Date(it.date)) == today }
+            .filter {
+                SimpleDateFormat(
+                    "yyyy-MM-dd",
+                    Locale.getDefault()
+                ).format(java.util.Date(it.date)) == today
+            }
             .sumOf { it.amount }
         val progressBar = buildProgressBar(state.progressPercentage)
 
@@ -553,7 +691,11 @@ AI normal kembali besok jam 07:00 WIB.
                     val response = listOf(
                         "${CurrencyFormatter.format(amount)} dicatat. Hmph, lumayan.",
                         "Oke, ${CurrencyFormatter.format(amount)} masuk. Jangan berhenti di sini.",
-                        "${CurrencyFormatter.format(amount)} tersimpan. Sisa ${CurrencyFormatter.format(_debtState.value.remainingDebt)}."
+                        "${CurrencyFormatter.format(amount)} tersimpan. Sisa ${
+                            CurrencyFormatter.format(
+                                _debtState.value.remainingDebt
+                            )
+                        }."
                     ).random()
                     addAiMessage(response)
                     withContext(Dispatchers.IO) { saveConversation(userMessage, response, true) }
@@ -605,8 +747,11 @@ AI normal kembali besok jam 07:00 WIB.
 
     fun getConversationCount(callback: (Int) -> Unit) {
         viewModelScope.launch {
-            try { callback(conversationRepository.getConversationCount()) }
-            catch (e: Exception) { callback(0) }
+            try {
+                callback(conversationRepository.getConversationCount())
+            } catch (e: Exception) {
+                callback(0)
+            }
         }
     }
 
@@ -615,26 +760,36 @@ AI normal kembali besok jam 07:00 WIB.
             try {
                 _positiveFeedbackCount.value = feedbackRepository.getPositiveCount()
                 _negativeFeedbackCount.value = feedbackRepository.getNegativeCount()
-            } catch (e: Exception) { Log.e(TAG, "Error loading feedback: ${e.message}") }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading feedback: ${e.message}")
+            }
         }
     }
 
     private suspend fun loadChatHistory() {
         try {
-            val todayMessages = withContext(Dispatchers.IO) { chatMessageRepository.getTodayMessages() }
+            val todayMessages =
+                withContext(Dispatchers.IO) { chatMessageRepository.getTodayMessages() }
             if (todayMessages.isNotEmpty()) {
                 _messages.value = todayMessages.map { entity ->
                     ChatMessage(
-                        text = entity.text, isFromUser = entity.isFromUser,
-                        timestamp = entity.timestamp, messageId = entity.id,
-                        feedbackGiven = entity.feedbackGiven, feedbackIsPositive = entity.feedbackIsPositive
+                        text = entity.text,
+                        isFromUser = entity.isFromUser,
+                        timestamp = entity.timestamp,
+                        messageId = entity.id,
+                        feedbackGiven = entity.feedbackGiven,
+                        feedbackIsPositive = entity.feedbackIsPositive
                     )
                 }
             }
-        } catch (e: Exception) { Log.e(TAG, "Error loading chat history: ${e.message}") }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading chat history: ${e.message}")
+        }
     }
 
-    fun dismissDepositConfirmation() { _depositConfirmation.value = null }
+    fun dismissDepositConfirmation() {
+        _depositConfirmation.value = null
+    }
 
     fun cancelPendingMessage() {
         if (activeMessageJob?.isActive == true) {
@@ -674,6 +829,7 @@ AI normal kembali besok jam 07:00 WIB.
                         Log.d(TAG, "Unknown action: ${match.groupValues[1]}")
                     }
                 }
+
                 else -> Log.d(TAG, "Unknown action: ${match.groupValues[1]}")
             }
 
@@ -821,7 +977,10 @@ AI normal kembali besok jam 07:00 WIB.
             msg.contains("429") || msg.contains("quota", true) ||
                     msg.contains("rate", true) || msg.contains("RESOURCE_EXHAUSTED", true) -> {
                 val isRpdLimit = msg.contains("per_day", true) || msg.contains("daily", true) ||
-                        msg.contains("RPD", true) || (msg.contains("quota", true) && msg.contains("day", true))
+                        msg.contains("RPD", true) || (msg.contains(
+                    "quota",
+                    true
+                ) && msg.contains("day", true))
                 if (isRpdLimit) {
                     "Limit harian API habis. Reset jam 07:00 WIB. " +
                             "Upgrade billing di Google AI Studio untuk limit lebih tinggi."
@@ -829,17 +988,21 @@ AI normal kembali besok jam 07:00 WIB.
                     "Terlalu banyak pesan dalam 1 menit. Tunggu sebentar lalu coba lagi."
                 }
             }
+
             msg.contains("API key", true) || msg.contains("401") ->
                 "API Key tidak valid. Cek GEMINI_API_KEY di local.properties."
+
             msg.contains("403") -> "Akses ditolak. Pastikan API Key punya izin untuk Gemini API."
             msg.contains("404") -> "Model tidak ditemukan. Cek nama model atau koneksi internet."
             e is java.net.UnknownHostException -> "Tidak bisa konek ke Gemini. Cek koneksi internet."
             e is java.net.SocketTimeoutException -> "Koneksi timeout. Coba lagi."
             msg.contains("500") || msg.contains("503") ->
                 "Server Gemini sedang bermasalah. Tunggu sebentar lalu coba lagi."
+
             else -> "Error: ${msg.take(120)}. Coba lagi ya!"
         }
     }
+
     private fun extractRetrySeconds(errorMsg: String): Long {
         val patterns = listOf(
             """retry.{0,20}(\d+)\s*s""".toRegex(RegexOption.IGNORE_CASE),
@@ -856,11 +1019,18 @@ AI normal kembali besok jam 07:00 WIB.
 
     private suspend fun saveConversation(userMsg: String, aiResp: String, wasSuccessful: Boolean) {
         try {
-            conversationRepository.insert(ConversationHistory(
-                userMessage = userMsg, aiResponse = aiResp,
-                timestamp = System.currentTimeMillis(), wasSuccessful = wasSuccessful, context = ""
-            ))
-        } catch (e: Exception) { Log.e(TAG, "Error saving conversation: ${e.message}") }
+            conversationRepository.insert(
+                ConversationHistory(
+                    userMessage = userMsg,
+                    aiResponse = aiResp,
+                    timestamp = System.currentTimeMillis(),
+                    wasSuccessful = wasSuccessful,
+                    context = ""
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving conversation: ${e.message}")
+        }
     }
 
     fun clearChatHistory() {
@@ -878,7 +1048,12 @@ AI normal kembali besok jam 07:00 WIB.
         }
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { chatMessageRepository.saveFeedback(messageId, isPositive) }
+                withContext(Dispatchers.IO) {
+                    chatMessageRepository.saveFeedback(
+                        messageId,
+                        isPositive
+                    )
+                }
                 val ctx = JSONObject().apply {
                     put("totalPaid", _debtState.value.totalPaid)
                     put("remaining", _debtState.value.remainingDebt)
@@ -886,14 +1061,21 @@ AI normal kembali besok jam 07:00 WIB.
                     put("personalityMode", _personalityMode.value.name)
                 }.toString()
                 withContext(Dispatchers.IO) {
-                    feedbackRepository.insert(ConversationFeedback(
-                        userMessage = lastUserMessage, aiResponse = lastAiResponse,
-                        isPositive = isPositive, timestamp = System.currentTimeMillis(), context = ctx
-                    ))
+                    feedbackRepository.insert(
+                        ConversationFeedback(
+                            userMessage = lastUserMessage,
+                            aiResponse = lastAiResponse,
+                            isPositive = isPositive,
+                            timestamp = System.currentTimeMillis(),
+                            context = ctx
+                        )
+                    )
                 }
                 if (isPositive) _positiveFeedbackCount.value += 1
                 else _negativeFeedbackCount.value += 1
-            } catch (e: Exception) { Log.e(TAG, "Error saving feedback: ${e.message}") }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving feedback: ${e.message}")
+            }
         }
     }
 
@@ -908,13 +1090,23 @@ AI normal kembali besok jam 07:00 WIB.
         try {
             chatModel = buildGenerativeModel(MODEL_NAME)
             chatModelFallback = buildGenerativeModel(MODEL_NAME_FALLBACK)
-        } catch (e: Exception) { Log.e(TAG, "Error rebuilding chatModel: ${e.message}") }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error rebuilding chatModel: ${e.message}")
+        }
     }
 
     private suspend fun saveTransaction(amount: Long, source: String) {
         try {
-            repository.insert(Transaction(amount = amount, source = source, date = System.currentTimeMillis()))
-        } catch (e: Exception) { Log.e(TAG, "Error saving transaction: ${e.message}", e) }
+            repository.insert(
+                Transaction(
+                    amount = amount,
+                    source = source,
+                    date = System.currentTimeMillis()
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving transaction: ${e.message}", e)
+        }
     }
 
     fun deleteTransaction(id: Long) {
@@ -930,7 +1122,12 @@ AI normal kembali besok jam 07:00 WIB.
         val tempMsg = ChatMessage(text, isFromUser = true)
         _messages.value = _messages.value + tempMsg
         viewModelScope.launch {
-            val dbId = withContext(Dispatchers.IO) { chatMessageRepository.saveMessage(text, isFromUser = true) }
+            val dbId = withContext(Dispatchers.IO) {
+                chatMessageRepository.saveMessage(
+                    text,
+                    isFromUser = true
+                )
+            }
             _messages.value = _messages.value.map {
                 if (it.messageId == tempMsg.messageId && it.isFromUser) it.copy(messageId = dbId) else it
             }
@@ -941,7 +1138,12 @@ AI normal kembali besok jam 07:00 WIB.
         val tempMsg = ChatMessage(text, isFromUser = false)
         _messages.value = _messages.value + tempMsg
         viewModelScope.launch {
-            val dbId = withContext(Dispatchers.IO) { chatMessageRepository.saveMessage(text, isFromUser = false) }
+            val dbId = withContext(Dispatchers.IO) {
+                chatMessageRepository.saveMessage(
+                    text,
+                    isFromUser = false
+                )
+            }
             _messages.value = _messages.value.map {
                 if (it.messageId == tempMsg.messageId && !it.isFromUser) it.copy(messageId = dbId) else it
             }
@@ -963,16 +1165,23 @@ AI normal kembali besok jam 07:00 WIB.
         viewModelScope.launch {
             try {
                 _isUpdatingDebt.value = true
-                val df = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
+                val df =
+                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
                 val parsed = df.parse(newDeadline) ?: return@launch
                 if (parsed.time <= System.currentTimeMillis()) return@launch
                 _customDeadline.value = newDeadline
                 withContext(Dispatchers.IO) { preferencesRepository.saveCustomDeadline(newDeadline) }
-                recalculateDebtState(transactions = _transactions.value, deadlineOverride = newDeadline)
+                recalculateDebtState(
+                    transactions = _transactions.value,
+                    deadlineOverride = newDeadline
+                )
                 rebuildChatModel()
                 delay(500)
-            } catch (e: Exception) { Log.e(TAG, "Error updating deadline: ${e.message}") }
-            finally { _isUpdatingDebt.value = false }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating deadline: ${e.message}")
+            } finally {
+                _isUpdatingDebt.value = false
+            }
         }
     }
 
@@ -983,11 +1192,17 @@ AI normal kembali besok jam 07:00 WIB.
                 _isUpdatingDebt.value = true
                 _totalDebt.value = newTotalDebt
                 withContext(Dispatchers.IO) { preferencesRepository.saveCustomTotalDebt(newTotalDebt) }
-                recalculateDebtState(transactions = _transactions.value, totalDebtOverride = newTotalDebt)
+                recalculateDebtState(
+                    transactions = _transactions.value,
+                    totalDebtOverride = newTotalDebt
+                )
                 rebuildChatModel()
                 delay(500)
-            } catch (e: Exception) { Log.e(TAG, "Error updating total debt: ${e.message}") }
-            finally { _isUpdatingDebt.value = false }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating total debt: ${e.message}")
+            } finally {
+                _isUpdatingDebt.value = false
+            }
         }
     }
 
@@ -1016,7 +1231,11 @@ AI normal kembali besok jam 07:00 WIB.
                 repository.allTransactions.firstOrNull() ?: emptyList()
             }
             _transactions.value = transactions
-            recalculateDebtState(transactions = transactions, deadlineOverride = deadline, totalDebtOverride = totalDebt)
+            recalculateDebtState(
+                transactions = transactions,
+                deadlineOverride = deadline,
+                totalDebtOverride = totalDebt
+            )
             _loadingStep.value = 3; rebuildChatModel()
             _loadingStep.value = 4; loadFeedbackStats()
             _loadingStep.value = 5; cleanupOldData()
@@ -1035,7 +1254,7 @@ AI normal kembali besok jam 07:00 WIB.
         viewModelScope.launch {
             try {
                 // Apply data ke state
-                _totalDebt.value      = totalDebt
+                _totalDebt.value = totalDebt
                 _customDeadline.value = deadline
 
                 // Simpan ke DataStore lokal
@@ -1052,8 +1271,8 @@ AI normal kembali besok jam 07:00 WIB.
                 }
                 _transactions.value = transactions
                 recalculateDebtState(
-                    transactions      = transactions,
-                    deadlineOverride  = deadline,
+                    transactions = transactions,
+                    deadlineOverride = deadline,
                     totalDebtOverride = totalDebt
                 )
 
@@ -1080,8 +1299,8 @@ AI normal kembali besok jam 07:00 WIB.
                 }
                 _transactions.value = freshTransactions
                 recalculateDebtState(
-                    transactions      = freshTransactions,
-                    deadlineOverride  = _customDeadline.value,
+                    transactions = freshTransactions,
+                    deadlineOverride = _customDeadline.value,
                     totalDebtOverride = _totalDebt.value
                 )
                 rebuildChatModel()
@@ -1120,12 +1339,15 @@ AI normal kembali besok jam 07:00 WIB.
                 val state = _debtState.value
                 val txList = _transactions.value
 
-                Log.d(TAG, "checkStreak: txCount=${txList.size}, totalDebt=${state.totalDebt}, dailyTarget=${state.dailyTarget}")
+                Log.d(
+                    TAG,
+                    "checkStreak: txCount=${txList.size}, totalDebt=${state.totalDebt}, dailyTarget=${state.dailyTarget}"
+                )
 
                 // Hitung streak
                 val streak = com.hyse.debtslayer.utils.StreakManager.calculate(
                     transactions = txList,
-                    dailyTarget  = state.dailyTarget
+                    dailyTarget = state.dailyTarget
                 )
                 _streakData.value = streak
 
@@ -1143,11 +1365,11 @@ AI normal kembali besok jam 07:00 WIB.
 
                 val result = com.hyse.debtslayer.utils.AchievementManager.buildAll(
                     transactions = txList,
-                    streakData   = streak,
-                    totalDebt    = state.totalDebt,
-                    totalPaid    = state.totalPaid,
-                    dailyTarget  = state.dailyTarget,
-                    unlockedIds  = unlockedIds
+                    streakData = streak,
+                    totalDebt = state.totalDebt,
+                    totalPaid = state.totalPaid,
+                    dailyTarget = state.dailyTarget,
+                    unlockedIds = unlockedIds
                 )
 
                 _achievements.value = result.allAchievements
@@ -1180,6 +1402,167 @@ AI normal kembali besok jam 07:00 WIB.
 
     fun dismissAchievementDialog() {
         _newlyUnlockedAchievement.value = null
+    }
+
+    // ── Mai Memory ───────────────────────────────────────────────────────
+    fun updateMaiMemory(transactions: List<Transaction>, progressPct: Float, dailyTarget: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val dayOfWeekFmt = SimpleDateFormat("EEEE", Locale("id", "ID"))
+
+                // Pakai _maiMemory.value (in-memory) bukan dari DataStore
+                // supaya nickname yang baru di-fetch tidak ter-overwrite
+                val current = _maiMemory.value
+
+                if (transactions.isEmpty()) return@launch
+
+                // ── Auto-fetch nickname dari Firestore ───────────────────
+                if (current.nickname.isBlank()) {
+                    try {
+                        val uid =
+                            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+                        if (uid != null) {
+                            val firestoreNickname = com.google.firebase.firestore.FirebaseFirestore
+                                .getInstance()
+                                .collection("users").document(uid)
+                                .get().await().getString("nickname")
+
+                            val name = when {
+                                !firestoreNickname.isNullOrBlank() -> firestoreNickname
+                                else -> ""
+                            }
+
+                            if (name.isNotBlank()) {
+                                Log.d(TAG, "Nickname from Firestore: $name")
+                                preferencesRepository.updateNickname(name)
+                                _maiMemory.value = current.copy(nickname = name)
+                                withContext(Dispatchers.Main) { rebuildChatModel() }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error fetching nickname from Firestore: ${e.message}")
+                    }
+                }
+
+                // Setoran pertama
+                val firstTx = transactions.minByOrNull { it.date }
+                val firstDate = firstTx?.let { sdf.format(java.util.Date(it.date)) } ?: ""
+
+                // Best day
+                val depositByDay = transactions
+                    .groupBy { sdf.format(java.util.Date(it.date)) }
+                    .mapValues { (_, list) -> list.sumOf { it.amount } }
+                val bestDay = depositByDay.maxByOrNull { it.value }
+                val bestDayAmount = bestDay?.value ?: 0L
+                val bestDayDate = bestDay?.key ?: ""
+
+                // Hari favorit setor
+                val dayCount = transactions
+                    .groupBy { dayOfWeekFmt.format(java.util.Date(it.date)) }
+                    .mapValues { (_, list) -> list.size }
+                val favoriteDay = dayCount.maxByOrNull { it.value }?.key ?: ""
+
+                // Hari berhasil capai target
+                val daysMetTarget = if (dailyTarget > 0) {
+                    depositByDay.count { (_, amount) -> amount >= dailyTarget }
+                } else 0
+
+                // Total hari ada setoran
+                val totalDepositDays = depositByDay.size
+
+                // Setoran terakhir
+                val lastTx = transactions.maxByOrNull { it.date }
+                val lastDepositDate = lastTx?.let { sdf.format(java.util.Date(it.date)) } ?: ""
+                val lastDepositAmount = lastTx?.amount ?: 0L
+
+                // Milestone
+                val milestone25 = current.milestone25Reached || progressPct >= 25f
+                val milestone50 = current.milestone50Reached || progressPct >= 50f
+                val milestone75 = current.milestone75Reached || progressPct >= 75f
+
+                // Ambil nickname terbaru dari _maiMemory (bukan current yang mungkin stale)
+                val latestNickname = _maiMemory.value.nickname.ifBlank { current.nickname }
+
+                val updated = current.copy(
+                    nickname           = latestNickname,
+                    firstDepositDate   = firstDate,
+                    bestDayAmount      = bestDayAmount,
+                    bestDayDate        = bestDayDate,
+                    favoriteDayOfWeek  = favoriteDay,
+                    daysMetTarget      = daysMetTarget,
+                    milestone25Reached = milestone25,
+                    milestone50Reached = milestone50,
+                    milestone75Reached = milestone75,
+                    totalDepositDays   = totalDepositDays,
+                    lastDepositDate    = lastDepositDate,
+                    lastDepositAmount  = lastDepositAmount
+                )
+
+                preferencesRepository.saveMaiMemory(updated)
+                _maiMemory.value = updated
+                Log.d(
+                    TAG,
+                    "MaiMemory updated: nickname=${updated.nickname}, bestDay=${updated.bestDayAmount}"
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating MaiMemory: ${e.message}")
+            }
+        }
+    }
+
+    fun setNickname(nickname: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            preferencesRepository.updateNickname(nickname)
+            _maiMemory.value = _maiMemory.value.copy(nickname = nickname)
+        }
+        rebuildChatModel()
+    }
+
+    private fun fetchNicknameWithRetry() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Retry max 10x dengan interval 1 detik
+            // Menunggu Firebase Auth session siap
+            repeat(10) { attempt ->
+                try {
+                    val uid = com.google.firebase.auth.FirebaseAuth
+                        .getInstance().currentUser?.uid
+
+                    if (uid == null) {
+                        Log.d(TAG, "fetchNickname attempt $attempt: uid null, retrying...")
+                        delay(1000)
+                        return@repeat
+                    }
+
+                    val currentNickname = _maiMemory.value.nickname
+                    if (currentNickname.isNotBlank() && !currentNickname.contains("@")) {
+                        Log.d(TAG, "fetchNickname: already have nickname=$currentNickname")
+                        return@launch
+                    }
+
+                    val nickname = com.google.firebase.firestore.FirebaseFirestore
+                        .getInstance()
+                        .collection("users").document(uid)
+                        .get().await()
+                        .getString("nickname") ?: ""
+
+                    if (nickname.isNotBlank()) {
+                        Log.d(TAG, "fetchNickname: got '$nickname' from Firestore")
+                        preferencesRepository.updateNickname(nickname)
+                        _maiMemory.value = _maiMemory.value.copy(nickname = nickname)
+                        withContext(Dispatchers.Main) { rebuildChatModel() }
+                        return@launch
+                    } else {
+                        Log.d(TAG, "fetchNickname attempt $attempt: nickname blank in Firestore")
+                        delay(1000)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "fetchNickname attempt $attempt error: ${e.message}")
+                    delay(1000)
+                }
+            }
+            Log.w(TAG, "fetchNickname: failed after 10 attempts")
+        }
     }
 
     // 🆕 Expose repository untuk CloudSyncRepository

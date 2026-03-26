@@ -38,6 +38,7 @@ class UserPreferencesRepository(private val context: Context) {
         // ── Streak & Achievement ─────────────────────────────────────────
         private val UNLOCKED_ACHIEVEMENTS_KEY = stringPreferencesKey("unlocked_achievements")
         private val LONGEST_STREAK_KEY = intPreferencesKey("longest_streak_ever")
+        private val MAI_MEMORY_KEY = stringPreferencesKey("mai_memory")
     }
 
     val personalityMode: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -243,6 +244,31 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs.remove(UNLOCKED_ACHIEVEMENTS_KEY)
             prefs.remove(LONGEST_STREAK_KEY)
+        }
+    }
+
+    // ── Mai Memory ───────────────────────────────────────────────────────
+    private val MAI_MEMORY_KEY = stringPreferencesKey("mai_memory")
+
+    val maiMemory: Flow<com.hyse.debtslayer.data.preferences.MaiMemory> =
+        context.dataStore.data.map { prefs ->
+            val raw = prefs[MAI_MEMORY_KEY] ?: ""
+            if (raw.isBlank()) com.hyse.debtslayer.data.preferences.MaiMemory()
+            else com.hyse.debtslayer.data.preferences.MaiMemory.fromJson(raw)
+        }
+
+    suspend fun saveMaiMemory(memory: com.hyse.debtslayer.data.preferences.MaiMemory) {
+        context.dataStore.edit { prefs ->
+            prefs[MAI_MEMORY_KEY] = memory.toJson()
+        }
+    }
+
+    suspend fun updateNickname(nickname: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[MAI_MEMORY_KEY]?.let {
+                com.hyse.debtslayer.data.preferences.MaiMemory.fromJson(it)
+            } ?: com.hyse.debtslayer.data.preferences.MaiMemory()
+            prefs[MAI_MEMORY_KEY] = current.copy(nickname = nickname).toJson()
         }
     }
 }

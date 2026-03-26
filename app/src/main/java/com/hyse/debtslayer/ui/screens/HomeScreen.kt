@@ -157,9 +157,27 @@ fun HomeScreen(
         } catch (e: Exception) { /* abaikan */ }
     }
 
-    // ── Cancel sync saat logout ───────────────────────────────────────────────
+    // ── Cancel sync saat logout ──────────────────────────────────────────
     LaunchedEffect(currentUser) {
         if (currentUser == null) AutoSyncWorker.cancel(context)
+    }
+
+    // ── Sync nickname dari Firebase ke MaiMemory ─────────────────────────
+    LaunchedEffect(currentUser) {
+        android.util.Log.d("HomeScreen", "currentUser=${currentUser?.uid}, displayName=${currentUser?.displayName}, email=${currentUser?.email}")
+        val displayName = currentUser?.displayName
+        if (!displayName.isNullOrBlank()) {
+            val nickname = displayName.split(" ").firstOrNull() ?: displayName
+            android.util.Log.d("HomeScreen", "Setting nickname: $nickname")
+            viewModel.setNickname(nickname)
+        } else {
+            // Fallback: pakai bagian pertama email
+            val emailName = currentUser?.email?.substringBefore("@")
+            if (!emailName.isNullOrBlank()) {
+                android.util.Log.d("HomeScreen", "Using email fallback: $emailName")
+                viewModel.setNickname(emailName)
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
