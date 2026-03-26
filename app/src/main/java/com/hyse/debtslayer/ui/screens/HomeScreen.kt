@@ -275,7 +275,8 @@ fun HomeScreen(
                             0    -> "💬 Chat dengan Mai"
                             1    -> "📅 Kalender"
                             2    -> "📊 Riwayat Transaksi"
-                            3    -> "⚙️ Pengaturan"
+                            3    -> "🏆 Achievement"
+                            4    -> "⚙️ Pengaturan"
                             else -> "DebtSlayer"
                         }
                     )
@@ -334,10 +335,16 @@ fun HomeScreen(
                     onClick  = { selectedItem = 2 }
                 )
                 NavigationBarItem(
-                    icon     = { Icon(Icons.Default.Settings, "Settings") },
-                    label    = { Text("Settings") },
+                    icon     = { Icon(Icons.Default.EmojiEvents, "Achievement") },
+                    label    = { Text("Badge") },
                     selected = selectedItem == 3,
                     onClick  = { selectedItem = 3 }
+                )
+                NavigationBarItem(
+                    icon     = { Icon(Icons.Default.Settings, "Settings") },
+                    label    = { Text("Settings") },
+                    selected = selectedItem == 4,
+                    onClick  = { selectedItem = 4 }
                 )
             }
         }
@@ -351,10 +358,20 @@ fun HomeScreen(
                 0 -> ChatScreen(viewModel = viewModel)
                 1 -> CalendarScreen(viewModel = viewModel)
                 2 -> HistoryScreen(viewModel = viewModel)
-                3 -> SettingsScreen(
+                3 -> AchievementScreen(viewModel = viewModel)
+                4 -> SettingsScreen(
                     viewModel     = viewModel,
                     authViewModel = authViewModel,
                     onShowLogin   = { currentScreen = AppScreen.LOGIN }
+                )
+            }
+
+            // ── Achievement unlock dialog — aktif di semua tab ──────────
+            val newlyUnlocked by viewModel.newlyUnlockedAchievement.collectAsState()
+            newlyUnlocked?.let { ach ->
+                AchievementUnlockDialog(
+                    achievement = ach,
+                    onDismiss   = { viewModel.dismissAchievementDialog() }
                 )
             }
 

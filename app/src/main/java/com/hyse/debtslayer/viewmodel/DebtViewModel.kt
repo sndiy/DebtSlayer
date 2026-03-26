@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -134,6 +135,18 @@ class DebtViewModel(
     val isOnboardingDone = preferencesRepository.isOnboardingDone
     val initialDeadline = preferencesRepository.initialDeadline
 
+    // ── Streak & Achievement ─────────────────────────────────────────────
+    private val _streakData = MutableStateFlow(com.hyse.debtslayer.utils.StreakData())
+    val streakData: StateFlow<com.hyse.debtslayer.utils.StreakData> = _streakData.asStateFlow()
+
+    private val _achievements = MutableStateFlow<List<com.hyse.debtslayer.utils.Achievement>>(emptyList())
+    val achievements: StateFlow<List<com.hyse.debtslayer.utils.Achievement>> = _achievements.asStateFlow()
+
+    private val _newlyUnlockedAchievement = MutableStateFlow<com.hyse.debtslayer.utils.Achievement?>(null)
+    val newlyUnlockedAchievement: StateFlow<com.hyse.debtslayer.utils.Achievement?> = _newlyUnlockedAchievement.asStateFlow()
+
+    val unlockedAchievements: Flow<Set<String>> = preferencesRepository.unlockedAchievements
+
     private val _setupDate = MutableStateFlow<String?>(null)
     val setupDate: StateFlow<String?> = _setupDate.asStateFlow()
 
@@ -203,11 +216,13 @@ class DebtViewModel(
             _loadingStep.value = 5; cleanupOldData()
             _loadingStep.value = 6; delay(100)
             _isDataReady.value = true
+            checkStreakAndAchievements()
         }
         viewModelScope.launch {
             repository.allTransactions.collect { transactionList ->
                 _transactions.value = transactionList
                 recalculateDebtState(transactionList)
+                checkStreakAndAchievements()
             }
         }
     }
@@ -903,7 +918,12 @@ AI normal kembali besok jam 07:00 WIB.
     }
 
     fun deleteTransaction(id: Long) {
-        viewModelScope.launch { withContext(Dispatchers.IO) { repository.deleteTransaction(id) } }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repository.deleteTransaction(id) }
+            // Achievement otomatis recalculate via allTransactions.collect()
+            // tapi kita pastikan unlockedIds juga di-sync ulang
+            Log.d(TAG, "Transaction deleted, achievements will recalculate")
+        }
     }
 
     private fun addUserMessage(text: String) {
@@ -1090,6 +1110,76 @@ AI normal kembali besok jam 07:00 WIB.
             recalculateDebtState(transactions = _transactions.value)
             rebuildChatModel()
         }
+    }
+
+    // ── Streak & Achievement ─────────────────────────────────────────────
+    private fun checkStreakAndAchievements() {
+        viewModelScope.launch {
+            try {
+                delay(300) // beri waktu debtState selesai update
+                val state = _debtState.value
+                val txList = _transactions.value
+
+                Log.d(TAG, "checkStreak: txCount=${txList.size}, totalDebt=${state.totalDebt}, dailyTarget=${state.dailyTarget}")
+
+                // Hitung streak
+                val streak = com.hyse.debtslayer.utils.StreakManager.calculate(
+                    transactions = txList,
+                    dailyTarget  = state.dailyTarget
+                )
+                _streakData.value = streak
+
+                // Update longest streak ke DataStore
+                if (streak.longestStreak > 0) {
+                    withContext(Dispatchers.IO) {
+                        preferencesRepository.updateLongestStreak(streak.longestStreak)
+                    }
+                }
+
+                // Cek achievements
+                val unlockedIds = withContext(Dispatchers.IO) {
+                    preferencesRepository.unlockedAchievements.firstOrNull() ?: emptySet()
+                }
+
+                val result = com.hyse.debtslayer.utils.AchievementManager.buildAll(
+                    transactions = txList,
+                    streakData   = streak,
+                    totalDebt    = state.totalDebt,
+                    totalPaid    = state.totalPaid,
+                    dailyTarget  = state.dailyTarget,
+                    unlockedIds  = unlockedIds
+                )
+
+                _achievements.value = result.allAchievements
+
+                // Sync DataStore: hanya simpan yang saat ini valid
+                // Ini otomatis reset achievement yang kondisinya sudah tidak terpenuhi
+                val currentlyValidIds = result.allAchievements
+                    .filter { it.isUnlocked }
+                    .map { it.id.name }
+                    .toSet()
+                withContext(Dispatchers.IO) {
+                    preferencesRepository.syncUnlockedAchievements(currentlyValidIds)
+                }
+
+                // Tampilkan dialog hanya untuk yang baru unlock
+                if (result.newlyUnlocked.isNotEmpty()) {
+                    Log.d(TAG, "New achievements: ${result.newlyUnlocked.map { it.id.name }}")
+                    result.newlyUnlocked.forEach { ach ->
+                        _newlyUnlockedAchievement.value = ach
+                        delay(3500)
+                        _newlyUnlockedAchievement.value = null
+                        delay(500)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking streak/achievements: ${e.message}")
+            }
+        }
+    }
+
+    fun dismissAchievementDialog() {
+        _newlyUnlockedAchievement.value = null
     }
 
     // 🆕 Expose repository untuk CloudSyncRepository

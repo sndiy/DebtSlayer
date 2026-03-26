@@ -34,6 +34,10 @@ class UserPreferencesRepository(private val context: Context) {
         // ✅ BARU: Tracking request harian (RPD)
         private val DAILY_REQUEST_COUNT_KEY = intPreferencesKey("daily_request_count")
         private val DAILY_REQUEST_DATE_KEY = stringPreferencesKey("daily_request_date")
+
+        // ── Streak & Achievement ─────────────────────────────────────────
+        private val UNLOCKED_ACHIEVEMENTS_KEY = stringPreferencesKey("unlocked_achievements")
+        private val LONGEST_STREAK_KEY = intPreferencesKey("longest_streak_ever")
     }
 
     val personalityMode: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -197,6 +201,48 @@ class UserPreferencesRepository(private val context: Context) {
                 val current = preferences[DAILY_REQUEST_COUNT_KEY] ?: 0
                 preferences[DAILY_REQUEST_COUNT_KEY] = current + 1
             }
+        }
+    }
+
+    // ── Streak & Achievement ─────────────────────────────────────────────
+    val unlockedAchievements: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[UNLOCKED_ACHIEVEMENTS_KEY] ?: ""
+        if (raw.isBlank()) emptySet()
+        else raw.split(",").filter { it.isNotBlank() }.toSet()
+    }
+
+    suspend fun addUnlockedAchievement(achievementId: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[UNLOCKED_ACHIEVEMENTS_KEY] ?: ""
+            val set = if (current.isBlank()) mutableSetOf()
+            else current.split(",").filter { it.isNotBlank() }.toMutableSet()
+            set.add(achievementId)
+            prefs[UNLOCKED_ACHIEVEMENTS_KEY] = set.joinToString(",")
+        }
+    }
+
+    val longestStreakEver: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[LONGEST_STREAK_KEY] ?: 0
+    }
+
+    suspend fun updateLongestStreak(streak: Int) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[LONGEST_STREAK_KEY] ?: 0
+            if (streak > current) prefs[LONGEST_STREAK_KEY] = streak
+        }
+    }
+
+    suspend fun syncUnlockedAchievements(validIds: Set<String>) {
+        context.dataStore.edit { prefs ->
+            // Hanya simpan achievement yang masih valid berdasarkan data terkini
+            prefs[UNLOCKED_ACHIEVEMENTS_KEY] = validIds.joinToString(",")
+        }
+    }
+
+    suspend fun clearUnlockedAchievements() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(UNLOCKED_ACHIEVEMENTS_KEY)
+            prefs.remove(LONGEST_STREAK_KEY)
         }
     }
 }

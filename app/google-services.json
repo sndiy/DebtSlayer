@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "732765698616",
+    "project_id": "debtslayer-80a6b",
+    "storage_bucket": "debtslayer-80a6b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:732765698616:android:6313ee21dbc8dc593304cd",
+        "android_client_info": {
+          "package_name": "com.hyse.debtslayer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQhxkiCnjwDI_Pftvkc73RGxRI7hqjbSY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

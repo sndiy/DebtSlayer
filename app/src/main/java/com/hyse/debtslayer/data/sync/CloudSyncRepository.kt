@@ -28,8 +28,9 @@ class CloudSyncRepository(
         reminderMinute: Int? = null,
         setupDate: String? = null
     ): SyncResult {
-        val transactions = transactionRepository.allTransactions.firstOrNull()
-            ?: return SyncResult(0, 0)
+        // ✅ FIX: Jangan return early saat transaksi null/kosong.
+        // Tetap lanjutkan proses agar bisa menghapus transaksi lama di cloud.
+        val transactions = transactionRepository.allTransactions.firstOrNull() ?: emptyList()
 
         // ── 1. Upload preferences ─────────────────────────────────
         val prefsMap = mutableMapOf<String, Any>()
@@ -47,7 +48,17 @@ class CloudSyncRepository(
                 .set(prefsMap, SetOptions.merge()).await()
         }
 
-        // ── 2. Upload transaksi yang berubah saja ─────────────────
+        // ── 2. Ambil semua ID transaksi yang ada di cloud ─────────
+        val cloudSnapshot = try {
+            firestore.collection("users").document(uid)
+                .collection("transactions")
+                .get().await()
+        } catch (e: Exception) { null }
+
+        val cloudIds = cloudSnapshot?.documents?.mapNotNull { it.getLong("id") }?.toSet()
+            ?: emptySet()
+
+        // ── 3. Tentukan transaksi yang berubah (perlu diupload) ───
         val metaRef = firestore
             .collection("users").document(uid)
             .collection("_meta").document("checksums")
@@ -55,19 +66,31 @@ class CloudSyncRepository(
         val metaDoc = try { metaRef.get().await() } catch (e: Exception) { null }
         val cloudChecksums = metaDoc?.data?.mapValues { it.value.toString() } ?: emptyMap()
 
+        val localIds = transactions.map { it.id }.toSet()
+
         val changed = transactions.filter { tx ->
             tx.checksum() != cloudChecksums[tx.id.toString()]
         }
 
-        if (changed.isEmpty()) return SyncResult(
-            total         = transactions.size,
-            uploaded      = 0,
-            prefsUploaded = prefsUploaded
-        )
+        // ── 4. Tentukan transaksi cloud yang harus dihapus ────────
+        // ✅ FIX: ID yang ada di cloud tapi tidak ada di lokal → harus dihapus
+        val toDeleteFromCloud = cloudIds - localIds
+
+        // ── 5. Jika tidak ada perubahan sama sekali, return early ─
+        // ✅ FIX: Cek toDeleteFromCloud juga, bukan hanya changed
+        if (changed.isEmpty() && toDeleteFromCloud.isEmpty()) {
+            return SyncResult(
+                total         = transactions.size,
+                uploaded      = 0,
+                prefsUploaded = prefsUploaded
+            )
+        }
 
         val batch = firestore.batch()
         val newChecksums = mutableMapOf<String, String>()
+        val deletedChecksums = mutableMapOf<String, Any>()
 
+        // ── 6. Upload transaksi yang berubah ──────────────────────
         changed.forEach { tx ->
             val ref = firestore
                 .collection("users").document(uid)
@@ -81,12 +104,38 @@ class CloudSyncRepository(
             newChecksums[tx.id.toString()] = tx.checksum()
         }
 
+        // ── 7. Hapus transaksi cloud yang tidak ada di lokal ──────
+        // ✅ FIX: Ini yang hilang sebelumnya — inilah penyebab bug utama
+        toDeleteFromCloud.forEach { id ->
+            val ref = firestore
+                .collection("users").document(uid)
+                .collection("transactions").document(id.toString())
+            batch.delete(ref)
+            // Tandai checksum-nya untuk dihapus juga
+            deletedChecksums[id.toString()] =
+                com.google.firebase.firestore.FieldValue.delete()
+        }
+
         batch.commit().await()
-        metaRef.set(newChecksums, SetOptions.merge()).await()
+
+        // ── 8. Update checksums: merge yang baru, hapus yang lama ─
+        if (newChecksums.isNotEmpty()) {
+            metaRef.set(newChecksums, SetOptions.merge()).await()
+        }
+        if (deletedChecksums.isNotEmpty()) {
+            metaRef.update(deletedChecksums).await()
+        }
+
+        // ✅ Jika lokal kosong dan semua cloud sudah dihapus,
+        // hapus juga dokumen checksums seluruhnya agar bersih
+        if (transactions.isEmpty()) {
+            try { metaRef.delete().await() } catch (e: Exception) { /* abaikan */ }
+        }
 
         return SyncResult(
             total         = transactions.size,
             uploaded      = changed.size,
+            deleted       = toDeleteFromCloud.size,     // ✅ baru
             prefsUploaded = prefsUploaded
         )
     }
@@ -128,7 +177,6 @@ class CloudSyncRepository(
             .firstOrNull() ?: emptyList()
         val localMap = localList.associateBy { it.id }
 
-        // ✅ Kumpulkan semua ID yang ada di cloud
         val cloudIds = mutableSetOf<Long>()
 
         var inserted = 0
@@ -163,8 +211,7 @@ class CloudSyncRepository(
             }
         }
 
-        // ✅ Hapus transaksi lokal yang TIDAK ADA di cloud
-        // (artinya sudah dihapus dari cloud sebelumnya)
+        // Hapus transaksi lokal yang tidak ada di cloud
         var deleted = 0
         localList.forEach { localTx ->
             if (localTx.id !in cloudIds) {
@@ -173,7 +220,7 @@ class CloudSyncRepository(
             }
         }
 
-        // ✅ Sync ulang checksums biar upload berikutnya tidak re-upload yang sudah ada
+        // Sync ulang checksums
         if (deleted > 0 || inserted > 0 || updated > 0) {
             try {
                 val metaRef = firestore
@@ -191,7 +238,7 @@ class CloudSyncRepository(
             totalCloud      = snapshot.size(),
             downloaded      = inserted,
             updated         = updated,
-            deleted         = deleted,            // ✅ baru
+            deleted         = deleted,
             totalDebt       = cloudTotalDebt,
             deadline        = cloudDeadline,
             personalityMode = cloudPersonality,
@@ -201,30 +248,19 @@ class CloudSyncRepository(
         )
     }
 
-    // ── Cek apakah ada data di cloud ─────────────────────────────
-    // ✅ FIX: Sebelumnya hanya cek transaksi → false untuk akun baru tanpa transaksi.
-    // Sekarang: cek dokumen user EXISTS saja — kalau akun sudah pernah login
-    // dan onboarding selesai, dokumen user pasti ada (dibuat saat uploadAll()).
-    // Kalau dokumen user tidak ada → benar-benar akun baru, belum onboarding.
+    // ── Cek apakah ada data di cloud ──────────────────────────────
     suspend fun hasCloudData(): Boolean {
         return try {
-            // Cek 1: ada transaksi di cloud?
             val txSnapshot = firestore
                 .collection("users").document(uid)
                 .collection("transactions")
                 .limit(1).get().await()
             if (!txSnapshot.isEmpty) return true
 
-            // Cek 2: dokumen user ada dan punya field totalDebt?
-            // (artinya onboarding sudah pernah selesai dan di-upload)
             val prefsDoc = firestore
                 .collection("users").document(uid)
                 .get().await()
 
-            // ✅ FIX: cukup cek dokumen exists + punya totalDebt.
-            // Kalau totalDebt ada berarti onboarding sudah selesai sebelumnya.
-            // Kalau tidak ada totalDebt → akun baru yang belum onboarding → return false
-            // supaya user diarahkan ke onboarding.
             prefsDoc.exists() && prefsDoc.contains("totalDebt")
         } catch (e: Exception) {
             false
@@ -252,18 +288,23 @@ class CloudSyncRepository(
 data class SyncResult(
     val total: Int = 0,
     val uploaded: Int = 0,
+    val deleted: Int = 0,               // ✅ baru
     val prefsUploaded: Boolean = false,
     val updated: Int = 0
 ) {
     fun uploadSummary(): String = when {
-        uploaded == 0 && !prefsUploaded ->
+        uploaded == 0 && deleted == 0 && !prefsUploaded ->
             "✅ Semua data sudah sinkron, tidak ada yang perlu diupload."
-        uploaded == 0 && prefsUploaded ->
+        uploaded == 0 && deleted == 0 && prefsUploaded ->
             "✅ Pengaturan berhasil diupload."
-        uploaded == total ->
-            "✅ Upload berhasil! $uploaded transaksi + pengaturan diunggah."
-        else ->
-            "✅ Upload berhasil! $uploaded dari $total transaksi + pengaturan diperbarui."
+        else -> buildString {
+            append("✅ Upload berhasil! ")
+            if (uploaded > 0) append("$uploaded transaksi diunggah")
+            if (uploaded > 0 && deleted > 0) append(", ")
+            if (deleted > 0) append("$deleted transaksi dihapus dari cloud")
+            if (prefsUploaded) append(" + pengaturan diperbarui")
+            append(".")
+        }
     }
 }
 
@@ -272,7 +313,7 @@ data class DownloadResult(
     val totalCloud: Int = 0,
     val downloaded: Int = 0,
     val updated: Int = 0,
-    val deleted: Int = 0,               // ✅ baru
+    val deleted: Int = 0,
     val totalDebt: Long? = null,
     val deadline: String? = null,
     val personalityMode: String? = null,
